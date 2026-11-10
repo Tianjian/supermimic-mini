@@ -1,0 +1,21 @@
+xml_path: ../assets/mujoco_menagerie/unitree_g1/scene_mjx.xml
+motion_dir: ./assets/motions
+out_dir: ./runs/smoke
+seed: 0
+num_envs: 4
+episode_s: 10.0
+buffer_capacity: 20000
+warmup_transitions: 512
+iters: 3
+transitions_per_iter: 128
+eval_every: 1000
+save_every: 1000
+eval_clips: 1
+eval_steps: 100
+wm_hidden: [256, 256]
+wm_batches: 1
+wm_batch: 64
+wm_k: 8
+horizon: 8
+pi_batch: 32
+critic_epochs: 1

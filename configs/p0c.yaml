@@ -1,0 +1,25 @@
+# P0 smoke: 1 clip, tiny batch, verify the whole loop
+xml_path: ../assets/mujoco_menagerie/unitree_g1/scene_mjx.xml
+motion_dir: ./assets/motions
+out_dir: ./runs/p0c
+seed: 0
+num_envs: 8
+episode_s: 10.0
+buffer_capacity: 50000
+warmup_transitions: 4000
+iters: 100
+transitions_per_iter: 512
+eval_every: 25
+save_every: 100
+eval_clips: 2
+eval_steps: 500
+wm_hidden: [1024, 1024, 1024]
+wm_batches: 2
+wm_batch: 256
+wm_k: 8
+wm_lr: 0.001
+horizon: 16
+pi_batch: 128
+pi_lr: 0.0002
+critic_epochs: 3
+init_wm: ./runs/wm_pretrain.pt

@@ -1,0 +1,27 @@
+xml_path: ../assets/mujoco_menagerie/unitree_g1/scene_mjx.xml
+motion_dir: ./assets/motions_trim
+out_dir: ./runs/wm_bptt_h16
+seed: 0
+num_envs: 8
+episode_s: 10.0
+buffer_capacity: 100000
+warmup_transitions: 20000
+iters: 100
+transitions_per_iter: 512
+eval_every: 25
+save_every: 100
+eval_clips: 5
+eval_steps: 500
+wm_hidden: [1024, 1024, 1024]
+wm_batches: 4
+wm_batch: 512
+wm_k: 8
+wm_lr: 0.001
+horizon: 16
+pi_batch: 256
+pi_lr: 0.0003
+critic_epochs: 3
+freeze_wm: true
+eval_at_start: true
+critic_state_dim: 73
+init_wm: ./runs/wm_teacher_283.pt

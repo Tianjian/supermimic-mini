@@ -1,0 +1,14 @@
+# Python >= 3.12
+mujoco==3.17.0
+numpy>=2.0
+scipy>=1.11
+PyYAML>=6.0
+torch==2.6.0
+
+# Optional, for the Warp path (separate venv):
+# warp-lang==1.17.0
+# mujoco-warp==3.16.0
+
+# Optional, for the MJX/JAX diagnostics:
+# jax[cuda12]
+# mujoco-mjx==3.17.0

@@ -1,0 +1,25 @@
+xml_path: ../assets/mujoco_menagerie/unitree_g1/scene_mjx.xml
+motion_dir: ./assets/motions
+out_dir: ./runs/p0_long2
+seed: 0
+num_envs: 8
+episode_s: 10.0
+buffer_capacity: 500000
+warmup_transitions: 20000
+iters: 800
+transitions_per_iter: 512
+eval_every: 50
+save_every: 200
+eval_clips: 5
+eval_steps: 500
+wm_hidden: [1024, 1024, 1024]
+wm_batches: 4
+wm_batch: 512
+wm_k: 8
+wm_lr: 0.001
+horizon: 16
+pi_batch: 256
+pi_lr: 0.0003
+critic_epochs: 3
+init_wm: ./runs/wm_pretrain.pt
+init_policy: ./runs/p0_long/best.pt

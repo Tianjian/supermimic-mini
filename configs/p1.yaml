@@ -1,0 +1,24 @@
+# P1 target: 5 clips, full-size batch/H
+xml_path: ../assets/mujoco_menagerie/unitree_g1/scene_mjx.xml
+motion_dir: ./assets/motions
+out_dir: ./runs/p1
+seed: 0
+num_envs: 32
+episode_s: 10.0
+buffer_capacity: 100000
+warmup_transitions: 20000
+iters: 20000
+transitions_per_iter: 1024
+eval_every: 500
+save_every: 2000
+eval_clips: 5
+eval_steps: 500
+wm_hidden: [1024, 1024, 1024]
+wm_batches: 4
+wm_batch: 512
+wm_k: 8
+wm_lr: 0.001
+horizon: 32
+pi_batch: 512
+pi_lr: 0.0002
+critic_epochs: 5
