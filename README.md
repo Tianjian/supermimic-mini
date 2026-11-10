@@ -21,6 +21,8 @@ The project is deliberately split into "what worked" and "what did not":
 
 ## Demo
 
+中文专栏文章（机器不学习）：https://zhuanlan.zhihu.com/p/2103496030801106886
+
 Long version (5 clips × 400 steps, ~45 s, teacher+residual 0.466):
 
 [![demo](docs/demo/poster_ppo_long.png)](docs/demo/supermimic_ppo_demo_long.mp4)
