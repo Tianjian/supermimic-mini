@@ -17,12 +17,14 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT/"exp"))
 from smini import motion, spec
 from smini.env import EnvCfg, TrackingEnv
 from smini.policy import Policy
+import wm_train
 from wm_train import make_wm, load_shards, build_valid
 from collect import to71
 
 XML = str(ROOT.parent/"assets"/"mujoco_menagerie"/"unitree_g1"/"scene_mjx.xml")
 MDIR = ROOT/"assets"/"motions"
 DATA = ROOT/"exp"/"data_v2"
+wm_train.DATA = DATA          # 否则 load_shards 会去读 v1 的 33 维数据
 DQ = np.asarray(spec.DEFAULT_Q)
 COLLECT_CFG = EnvCfg(obs_noise=True, reset_noise=True, domain_randomization=True, action_noise=0.0)
 CLEAN = EnvCfg(obs_noise=False, reset_noise=False, domain_randomization=False, action_noise=0.0)
@@ -157,11 +159,17 @@ def main():
         # 混合采样: online + fixed
         io = vo[torch.randint(0, len(vo), (n_online,), device="cuda")]
         ixf = vf[torch.randint(0, len(vf), (a.batch - n_online,), device="cuda")]
-        S_b = torch.cat([So_t[io], Sf_t[ixf]], 0); A_b = torch.cat([Ao_t[io], Af_t[ixf]], 0)
+        # 按步 gather 成 (B, k+1, 71) 状态窗口与 (B, k, 29) 动作
+        So_w = torch.stack([So_t[io + j] for j in range(a.k + 1)], 1)
+        Sf_w = torch.stack([Sf_t[ixf + j] for j in range(a.k + 1)], 1)
+        Ao_w = torch.stack([Ao_t[io + j] for j in range(a.k)], 1)
+        Af_w = torch.stack([Af_t[ixf + j] for j in range(a.k)], 1)
+        S_b = torch.cat([So_w, Sf_w], 0)
+        A_b = torch.cat([Ao_w, Af_w], 0)
         X_b = torch.cat([Xo_t[io], Xf_t[ixf]], 0)
         loss = 0.0
         with torch.autocast("cuda", dtype=torch.float16):
-            p = S_b
+            p = S_b[:, 0]          # (B,71) 起始状态
             for j in range(a.k):
                 p = wm.step(p, A_b[:, j], X_b)
                 e = wm.spec.error_vector(p, S_b[:, j+1])
