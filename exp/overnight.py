@@ -79,7 +79,7 @@ def run_batch(jobs, tag):
 def ac(ckpt, extra, tag):
     cmd = [sys.executable, "-u", "exp/ac_bptt.py",
            "--ckpt", str(ckpt), "--teacher-base", "--skip-bc", "--evalkit",
-           "--B", "64", "--iters", "100", "--out", str(RUNS/f"{tag}.json")] + extra
+           "--B", "64", "--iters", "60", "--out", str(RUNS/f"{tag}.json")] + extra
     return cmd, tag
 
 
@@ -89,7 +89,7 @@ def main():
 
     # ---------------- A1: 教师底座 + BPTT ----------------
     jobs = []
-    cfg = [(16, "0"), (16, "0.02"), (8, "0.02")]      # 9 个 run
+    cfg = [(16, "0.02")]      # A1 已显示崩塌; 只留 3 种子做干净记录
     for H, kl in cfg:
         for s in range(3):
             tag = f"A1_H{H}_kl{kl.replace('.','')}_s{s}"
@@ -108,6 +108,8 @@ def main():
                      "--mag-prob", "0.2", "--mag-scale", "3.0"]),
         ("B_mag2",  ["--online-frac", "0.5", "--steps", "10000", "--online-size", "150000",
                      "--mag-prob", "0.3", "--mag-scale", "4.0"]),
+        ("B_mag3",  ["--online-frac", "0.6", "--steps", "14000", "--online-size", "200000",
+                     "--mag-prob", "0.4", "--mag-scale", "5.0"]),
     ):
         cmd = [sys.executable, "-u", "exp/wm_onpolicy.py",
                "--ckpt", str(RUNS/"v3_best.pt"), "--policy", str(RUNS/"p0_clean.pt"),
@@ -135,12 +137,14 @@ def main():
     manifest["best_wm"] = str(best_wm)
 
     c_jobs = []
-    for H in (16, 8):
+    for H in (16,):
         for s in range(3):
-            tag = f"C_H{H}_s{s}"
-            cmd, _ = ac(best_wm, ["--H", str(H), "--kl-target", "0.02", "--seed", str(s),
-                                  "--reset-adam-on-bt"], tag)
-            c_jobs.append((cmd, tag))
+            for anch in (True, False):
+                tag = f"C_H{H}_anchor{int(anch)}_s{s}"
+                extra = ["--H", str(H), "--kl-target", "0.02", "--seed", str(s),
+                         "--reset-adam-on-bt"] + (["--anchor-init"] if anch else [])
+                cmd, _ = ac(best_wm, extra, tag)
+                c_jobs.append((cmd, tag))
     manifest["batches"]["C"] = run_batch(c_jobs, "C")
 
     # ---------------- 视频 (失败不影响报告) ----------------

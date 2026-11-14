@@ -79,6 +79,8 @@ def main():
                     help="用教师网络做底座(零蒸馏误差), goal 改成 680, obs 走 obs930 重排")
     ap.add_argument("--reset-adam-on-bt", action="store_true",
                     help="信赖域回溯后清空 Adam 动量 (评审 E2 修复)")
+    ap.add_argument("--anchor-init", action="store_true",
+                    help="信赖域锚定**初始**策略(限制累积漂移), 而非仅限制单轮变化")
     a = ap.parse_args()
 
     torch.set_num_threads(4); torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -204,7 +206,14 @@ def main():
     std0, _ = eval_std()
     print(f"标准化评测(5 clips) 起手: {std0:.4f}", flush=True)
 
-    print(f"BPTT ... (KL/信赖域: target={a.kl_target}, sigma={a.kl_sigma})", flush=True)
+    print(f"BPTT ... (KL/信赖域: target={a.kl_target}, sigma={a.kl_sigma}, "
+          f"anchor_init={a.anchor_init})", flush=True)
+    anchor_net = None
+    if a.anchor_init:
+        import copy as _copy
+        anchor_net = _copy.deepcopy(pol).eval()
+        for _p in anchor_net.parameters(): _p.requires_grad_(False)
+        print("  trust region anchored to INIT policy", flush=True)
     hist_log = []
     best_std = std0
 
@@ -218,31 +227,41 @@ def main():
         if not starts: continue
         Nb = len(starts)
         s0, oh0, goals, refs = [], [], [], []
+        starts_used = []
         for mid, f0 in starts:
             mo = lib[mid]
             e = make_env(mid, f0)
+            # --- 关键: 用被训练的策略自身热身, 且 s0/oh0/goals 必须取自同一时刻 ---
+            obs = e._obs.copy()
+            hist = [obs] * spec.HISTORY
+            with torch.no_grad():
+                for _ in range(spec.HISTORY):
+                    fi = min(int(e.frame_idx), len(mo) - 1)
+                    gv = goal680(mo.qpos, mo.qvel, fi) if a.teacher_base else mo.goal_window(fi)
+                    g = torch.as_tensor(gv, dtype=torch.float32).cuda()[None]
+                    oh = torch.as_tensor(np.stack(hist)[None].astype(np.float32)).cuda()
+                    act = pol(g, oh)[0].cpu().numpy()
+                    obs, r, te, tr, _ = e.step(act)
+                    hist = hist[1:] + [obs]
+                    if te or tr: break
+            f_start = min(int(e.frame_idx), max(len(mo) - a.H - 2, 0))
             q = e._data.qpos; v = e._data.qvel
             s0.append(np.concatenate([q[0:3], q[3:7], q[7:36], v[0:3], v[3:6], v[6:35]]))
-            goals.append(goal680(mo.qpos, mo.qvel, f0) if a.teacher_base else mo.goal_window(f0 + 1))
-            r = build_ref(mo, f0 + 1, a.H, device="cpu")
-            refs.append({k: vv.numpy() for k, vv in r.items()})
-            hist = []
-            for _ in range(10):
-                hist.append(e._obs.copy())
-                e.step(e._goal[15:44] / spec.ACTION_SCALE)
+            goals.append(goal680(mo.qpos, mo.qvel, f_start) if a.teacher_base
+                         else mo.goal_window(f_start + 1))
+            refs.append(build_ref(mo, f_start + 1, a.H, device="cpu"))
             oh0.append(np.stack(hist))
+            starts_used.append((mid, f_start))
         s = torch.as_tensor(np.stack(s0).astype(np.float32)).cuda()
         oh = torch.as_tensor(np.stack(oh0).astype(np.float32)).cuda()
-        oh_start = oh.clone()          # 信赖域回溯用的初始 obs 历史
+        oh_start = oh.clone()
         g0 = torch.as_tensor(np.stack(goals).astype(np.float32)).cuda()
         refb = {k: torch.as_tensor(np.stack([r[k] for r in refs]).astype(np.float32)).cuda()
                 for k in refs[0]}
         xi_b = xi.expand(Nb, -1).contiguous()
 
-        # 逐目标窗口: step t 用 frames(f0+1+t .. f0+1+t+9)
-        # goal_window 返回的是 t+1..t+10, 这里直接用同一窗口随 t 平移
         gl = []
-        for mid, f0 in starts:
+        for mid, f0 in starts_used:
             mo = lib[mid]
             gl.append(np.stack([goal680(mo.qpos, mo.qvel, f0 + t) if a.teacher_base
                                 else mo.goal_window(f0 + 1 + t) for t in range(a.H)]))
@@ -281,8 +300,10 @@ def main():
         # P2: 更新前记录参考动作, 更新后做信赖域回溯
         if a.kl_target > 0:
             with torch.no_grad():
-                a_ref = pol(g0, oh_start).detach()
-            old_par = [q.detach().clone() for q in pol.parameters()]
+                a_ref = (anchor_net(g0, oh_start) if anchor_net is not None
+                         else pol(g0, oh_start)).detach()
+            old_par = [q.detach().clone() for q in (anchor_net.parameters() if anchor_net is not None
+                                                    else pol.parameters())]
         opt_p.step()
         dev_val = 0.0
         if a.kl_target > 0:

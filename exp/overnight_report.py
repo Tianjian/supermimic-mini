@@ -96,11 +96,12 @@ def main():
     lines += ["## 阶段 C：用改进 WM 重试 BPTT", ""]
     cg = {}
     for H in (16, 8):
-        rows = []
-        for s in range(3):
-            r = ac_row(f"C_H{H}_s{s}")
-            if r: rows.append(r)
-        if rows: cg[f"H={H}"] = rows
+        for anch in (1, 0):
+            rows = []
+            for s in range(3):
+                r = ac_row(f"C_H{H}_anchor{anch}_s{s}")
+                if r: rows.append(r)
+            if rows: cg[f"H={H} anchor={anch}"] = rows
     if cg:
         lines += ["| 配置 | 起手 | 各种子最终 | 均值 ± std | 相对 |", "|---|---|---|---|---|"]
         for k, rows in cg.items():
