@@ -282,6 +282,8 @@ def main():
                              "dev": dev_val})
 
 
+    torch.save({"policy": pol.state_dict(), "iters": a.iters},
+               str(a.out).replace(".json", "_final.pt"))
     final = evaluate(n=10, steps=200)
     print(f"\n最终 raw 每步回报: {final:.5f}  (BC 后 {base:.5f}, 相对 {100*(final-base)/base:+.2f}%)")
     json.dump({"base": float(base), "final": float(final), "log": hist_log,
