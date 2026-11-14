@@ -81,6 +81,8 @@ def main():
                     help="信赖域回溯后清空 Adam 动量 (评审 E2 修复)")
     ap.add_argument("--anchor-init", action="store_true",
                     help="信赖域锚定**初始**策略(限制累积漂移), 而非仅限制单轮变化")
+    ap.add_argument("--act-clamp", type=float, default=0.0,
+                    help="动作空间硬夹: 把想象动作夹在锚定策略动作 ±ε 内 (0=关闭)")
     a = ap.parse_args()
 
     torch.set_num_threads(4); torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -209,7 +211,8 @@ def main():
     print(f"BPTT ... (KL/信赖域: target={a.kl_target}, sigma={a.kl_sigma}, "
           f"anchor_init={a.anchor_init})", flush=True)
     anchor_net = None
-    if a.anchor_init:
+    if a.anchor_init or a.act_clamp > 0:
+        a.anchor_init = True
         import copy as _copy
         anchor_net = _copy.deepcopy(pol).eval()
         for _p in anchor_net.parameters(): _p.requires_grad_(False)
@@ -271,6 +274,10 @@ def main():
         Rs = []; Vs = []
         for t in range(a.H):
             act = pol(gseq[:, t], oh)
+            if a.act_clamp > 0 and anchor_net is not None:
+                with torch.no_grad():
+                    a_anc = anchor_net(gseq[:, t], oh)
+                act = torch.clamp(act, a_anc - a.act_clamp, a_anc + a.act_clamp)
             s = wm.step(s, act, xi_b)
             r = D.reward8(s, act, prev, {k: v[:, t] for k, v in refb.items()}, fk)
             Rs.append(r)

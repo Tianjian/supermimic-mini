@@ -68,7 +68,7 @@ def main():
     # ---------------- B ----------------
     lines += ["## 阶段 B：on-policy WM 与动作幅度偏置", ""]
     brows = []
-    for tag in ("B_base", "B_mag", "B_mag2"):
+    for tag in ("B_base", "B_mag", "B_mag2", "B_mag3"):
         d = load(tag)
         if not d: continue
         log = d.get("log") or []
@@ -101,7 +101,12 @@ def main():
             for s in range(3):
                 r = ac_row(f"C_H{H}_anchor{anch}_s{s}")
                 if r: rows.append(r)
-            if rows: cg[f"H={H} anchor={anch}"] = rows
+            if rows: cg[f"C H={H} anchor={anch}"] = rows
+    rows = []
+    for s in range(3):
+        r = ac_row(f"C_H16_s{s}")
+        if r: rows.append(r)
+    if rows: cg["C H=16 (改进 WM, 无锚定)"] = rows
     if cg:
         lines += ["| 配置 | 起手 | 各种子最终 | 均值 ± std | 相对 |", "|---|---|---|---|---|"]
         for k, rows in cg.items():

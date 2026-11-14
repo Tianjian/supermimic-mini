@@ -324,6 +324,8 @@ python exp/mpc_test.py --ckpt exp/runs/v2_best.pt --H 32 # 规划验证
 
 | 文件 | 内容 |
 |---|---|
+| **[docs/OVERNIGHT-REPORT.md](docs/OVERNIGHT-REPORT.md)** | **一夜四阶段结果：BPTT 崩塌根因 = 动作空间逃逸；动作夹具把 −80% 变 −0.8%** |
+| **[docs/A1-FINDING.md](docs/A1-FINDING.md)** | **A1：零蒸馏误差的教师底座也会被 BPTT 打崩（−79.8%）** |
 | **[docs/OVERNIGHT-PLAN.md](docs/OVERNIGHT-PLAN.md)** | **今夜 8h 无人值守执行计划（A/B/C 三阶段、门禁、工程保障）** |
 | **[docs/NEXT-PLAN.md](docs/NEXT-PLAN.md)** | **后续优化设计：阶段 A（消掉底座混杂）/ B（修 WM 幅度偏置）/ C（重试 BPTT）+ 门禁与成本** |
 | **[docs/CRITICAL-REVIEW.md](docs/CRITICAL-REVIEW.md)** | **对抗性自查：度量的 4 个缺陷、统计 3 项、P0/P1/P2 共 18 个可改进处** |
