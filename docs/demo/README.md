@@ -29,3 +29,28 @@
 
 - `supermimic_ppo_demo_long.mp4`：teacher + residual（env8 **0.466**）在 5 条 trimmed LAFAN1 clip 上各 400 步，约 40 s；渲染脚本 `scripts/render_ppo_policy_long.py`。
 - 标准版 `supermimic_ppo_demo.mp4`（150 步/条，19.6 s）保留用于快速查看。
+
+## 修正协议下的策略对比视频（2026-11-14 新增）
+
+`compare/compare_walk1_subject1.mp4` 与 `compare/compare_dance1_subject1.mp4`
+（1500×300，25 fps，各 300 控制步 = 6 s，`:300` 五格并排）。
+
+五格从左到右：**REF**（参考动作的运动学播放）、**TEACHER**（公开权重）、
+**BC**（教师蒸馏）、**BPTT+TR**（BPTT + 信赖域）、**PD**（按参考位姿直接给 setpoint）。
+每格左上角显示当前累计归一化分（固定分母 `0.1×已走步数`）与被终止时的 `FALL@N`。
+
+单 clip 实测（同起点、同 clip）：
+
+| clip | TEACHER | BC | BPTT+TR | PD |
+|---|---|---|---|---|
+| walk1_subject1 | 0.516（跑满 300） | 0.179（94 步） | 0.115（48 步） | 0.085（42 步） |
+| dance1_subject1 | 0.698（跑满 300） | 0.136（61 步） | **0.166（82 步）** | 0.112（50 步） |
+
+**看图能直接得到三个结论**（和 6-clip 平均的数字一致，但更直白）：
+
+1. **教师是唯一能跑完 300 步的**。其余三个都在 1–2 秒内摔倒——这正是修正协议揭示的"旧协议里靠站着不动拿分"的真相。
+2. **BC 蒸馏学到的动作幅度不够**：它比 PD 活得久（94 vs 42 步），但远达不到教师。
+3. **BPTT 的效果逐 clip 不一致**：dance 上它比 BC 活得更久（82 vs 61 步、0.166 vs 0.136），walk 上却更差（48 vs 94 步）。与 6-clip 平均 −26.6% 并不矛盾——**平均负、个别正**，说明 BPTT 在当前 WM 精度下主要是在拟合模型误差，而不是稳定地改进控制。
+
+渲染：`MUJOCO_GL=glfw python exp/render_compare.py --clip <name> --steps 300`。
+（本机 EGL/OSMesa 不可用，需 `glfw`；视频编码用 `imageio-ffmpeg`。）
