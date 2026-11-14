@@ -6,3 +6,8 @@ assets/
 docs/demo/frames/
 *.log
 MUJOCO_LOG.TXT
+
+# ---- 本机 16GB 实验产物 (数据/权重/日志, 不入库) ----
+exp/data*/
+exp/runs/
+exp/__pycache__/

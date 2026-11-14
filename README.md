@@ -19,6 +19,12 @@ The project is deliberately split into "what worked" and "what did not":
 > not a reproduction of the paper's 0.82 on 40 full clips. The paper-scale run
 > (4096 env, ~100M transitions, 2048³ WM) is out of reach on this hardware.
 
+> **后续更新（2026-11-14）**：在 **16 GB AMD RX 6800 XT** 上把 WM 与 BPTT 重跑了一遍
+> （4M transitions / 2048³ / 30k 梯度步）。原报告的「WM 动作敏感度 7.5%」被修正为
+> **capture 81%**，动作梯度符号一致率 **96.2%**，BPTT 规划在真值仿真器里带来
+> **+24.8%（p=1.4e-9）**。**"BPTT 不可用"的结论不再成立**——瓶颈已转移到奖励头缺 14 个
+> body link 项。详见 [`docs/WM-BPTT-16GB.md`](docs/WM-BPTT-16GB.md)，代码在 [`exp/`](exp/README.md)。
+
 ## Demo
 
 中文专栏文章（机器不学习）：https://zhuanlan.zhihu.com/p/2103496758332494680
@@ -47,6 +53,11 @@ diagnosis:
 
 That is the main lesson: **a world model must be action-conditioned, not just
 accurate on passive trajectories.**
+
+> **修正（2026-11-14）**：上面这段「7.5%」是**欠训练**的产物，不是环境上限。同一诊断在
+> 16 GB 卡上重做后：真值仿真器敏感度是 **34.3%**（不是 7.5%），训练到位的 WM 捕获了其中
+> **81%**。原因见 [`docs/WM-BPTT-16GB.md`](docs/WM-BPTT-16GB.md) §1、§3。
+> "动作条件化是 WM 的生命线"这个**直觉仍然成立**，但"7.5% 是上限"这个**结论是错的**。
 
 ## What is included
 
@@ -149,6 +160,7 @@ python scripts/train_wm71_clean.py \
 
 | File | Content |
 |---|---|
+| **[docs/WM-BPTT-16GB.md](docs/WM-BPTT-16GB.md)** | **16 GB 卡重跑：WM capture 81%、梯度一致 96.2%、BPTT 规划 +24.8%；修正 7.5% 结论** |
 | [docs/FINAL-REPORT.md](docs/FINAL-REPORT.md) | final report: approach, positive/negative results, root cause, gap |
 | [docs/PAPER-GAP.md](docs/PAPER-GAP.md) | quantitative gap vs the paper |
 | [docs/WM-UPGRADE.md](docs/WM-UPGRADE.md) | WM import/retrain attempts, action-sensitivity diagnosis |
