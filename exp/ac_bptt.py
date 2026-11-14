@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT/"exp"))
 from smini import motion, spec
 from smini.env import EnvCfg, TrackingEnv
 from smini.policy import Policy, Critic
+sys.path.insert(0, str(ROOT/"scripts"))
+from eval_pretrained import Pol as TeacherPolNet, goal680
 from wm_train import make_wm
 import diff_fk as D
 from diff_fk import FKTable
@@ -30,6 +32,19 @@ DATA = ROOT/"exp"/"data_v2"
 DQ = torch.as_tensor(np.asarray(spec.DEFAULT_Q), dtype=torch.float32)
 D.set_action_scale(spec.ACTION_SCALE)
 CLEAN = EnvCfg(obs_noise=False, reset_noise=False, domain_randomization=False, action_noise=0.0)
+
+
+class TeacherBase(torch.nn.Module):
+    """把教师的 Pol(goal680, obs930) 包成 (goal680, oh10x93) 接口, 供 AC 循环使用。"""
+    TERMS = [(0, 29), (29, 58), (58, 61), (61, 64), (64, 93)]
+
+    def __init__(self, pol):
+        super().__init__(); self.pol = pol
+
+    def forward(self, goal680x, oh10):
+        B = oh10.shape[0]
+        x = torch.cat([oh10[:, :, a:b].reshape(B, -1) for a, b in self.TERMS], -1)
+        return self.pol(goal680x, x)
 
 
 def obs71(s71, prev_a):
@@ -60,6 +75,10 @@ def main():
     ap.add_argument("--evalkit", action="store_true",
                     help="用修正协议评测(裁切数据+固定步数归一化); 否则用旧协议")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--teacher-base", action="store_true",
+                    help="用教师网络做底座(零蒸馏误差), goal 改成 680, obs 走 obs930 重排")
+    ap.add_argument("--reset-adam-on-bt", action="store_true",
+                    help="信赖域回溯后清空 Adam 动量 (评审 E2 修复)")
     a = ap.parse_args()
 
     torch.set_num_threads(4); torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -73,11 +92,19 @@ def main():
     lib = motion.MotionLibrary([motion.load_motion(str(MDIR/f"{c}.npz")) for c in meta["train"]])
     rng = np.random.default_rng(a.seed)
 
-    pol = Policy(obs_dim=93, goal_dim=730, action_dim=29, hist=10).cuda()
+    if a.teacher_base:
+        tck = torch.load(str(ROOT/"runs/pretrained/policy.pt"), map_location="cuda", weights_only=False)
+        base_net = TeacherPolNet(); base_net.load_state_dict(tck["policy"], strict=True)
+        pol = TeacherBase(base_net).cuda()
+        goal_dim = 680
+        print("teacher base loaded (iter %s)" % tck.get("iteration"), flush=True)
+    else:
+        goal_dim = 730
+        pol = Policy(obs_dim=93, goal_dim=goal_dim, action_dim=29, hist=10).cuda()
     if a.init:
         ck0 = torch.load(a.init, map_location="cuda", weights_only=False)
         pol.load_state_dict(ck0["policy"]); print(f"pol init from {a.init} (score {ck0.get('score')})", flush=True)
-    crit = Critic(state_dim=71, goal_dim=730, xi_dim=34).cuda()
+    crit = Critic(state_dim=71, goal_dim=goal_dim, xi_dim=34).cuda()
     opt_p = torch.optim.Adam(pol.parameters(), lr=a.lr)
     opt_v = torch.optim.Adam(crit.parameters(), lr=a.lr)
     xi = torch.as_tensor(np.concatenate([[1., 1.], np.zeros(29), np.zeros(3)]),
@@ -89,8 +116,8 @@ def main():
         return e
 
     # ---------------- BC 热启动 ----------------
-    if a.skip_bc and a.init:
-        a.bc_steps = 0
+    if a.skip_bc or a.teacher_base:
+        a.bc_steps = 0        # 教师底座绝不能被 BC 重训覆盖
     print(f"BC warm start ({a.bc_steps} steps) ...", flush=True)
     t0 = time.time()
     for it in range(a.bc_steps):
@@ -103,7 +130,8 @@ def main():
             act = e._goal[15:44] / spec.ACTION_SCALE
             hist.append(e._obs.copy())
             e.step(act)
-        goal = torch.as_tensor(mo.goal_window(int(e.frame_idx)), dtype=torch.float32).cuda()[None]
+        _gv = goal680(mo.qpos, mo.qvel, int(e.frame_idx)) if a.teacher_base else mo.goal_window(int(e.frame_idx))
+        goal = torch.as_tensor(_gv, dtype=torch.float32).cuda()[None]
         oh = torch.as_tensor(np.stack(hist)[None].astype(np.float32)).cuda()
         tgt = torch.as_tensor((mo.qpos[min(int(e.frame_idx), len(mo)-1)][7:36] - np.asarray(spec.DEFAULT_Q))
                               / np.asarray(spec.ACTION_SCALE), dtype=torch.float32).cuda()[None]
@@ -126,7 +154,8 @@ def main():
             R = 0.0
             for t in range(steps):
                 gi = min(int(e.frame_idx), len(mo) - 12)
-                goal = torch.as_tensor(mo.goal_window(gi), dtype=torch.float32).cuda()[None]
+                _gv = goal680(mo.qpos, mo.qvel, gi) if a.teacher_base else mo.goal_window(gi)
+                goal = torch.as_tensor(_gv, dtype=torch.float32).cuda()[None]
                 oh = torch.as_tensor(np.stack(hist)[None].astype(np.float32)).cuda()
                 act = pol(goal, oh)[0].cpu().numpy()
                 _, r, te, tr, _ = e.step(act)
@@ -148,7 +177,8 @@ def main():
             @torch.no_grad()
             def fn(lb, ci, env, hist):
                 mo = lb[ci]; fi = min(int(env.frame_idx), len(mo)-1)
-                g = torch.as_tensor(mo.goal_window(fi), dtype=torch.float32).cuda()[None]
+                gv = goal680(mo.qpos, mo.qvel, fi) if a.teacher_base else mo.goal_window(fi)
+                g = torch.as_tensor(gv, dtype=torch.float32).cuda()[None]
                 oh = torch.as_tensor(hist[None].astype(np.float32)).cuda()
                 return pol(g, oh)[0].cpu().numpy()
             r = EK.evaluate(fn, lib_eval, steps=steps, seed=0)
@@ -193,7 +223,7 @@ def main():
             e = make_env(mid, f0)
             q = e._data.qpos; v = e._data.qvel
             s0.append(np.concatenate([q[0:3], q[3:7], q[7:36], v[0:3], v[3:6], v[6:35]]))
-            goals.append(mo.goal_window(f0 + 1))
+            goals.append(goal680(mo.qpos, mo.qvel, f0) if a.teacher_base else mo.goal_window(f0 + 1))
             r = build_ref(mo, f0 + 1, a.H, device="cpu")
             refs.append({k: vv.numpy() for k, vv in r.items()})
             hist = []
@@ -214,7 +244,8 @@ def main():
         gl = []
         for mid, f0 in starts:
             mo = lib[mid]
-            gl.append(np.stack([mo.goal_window(f0 + 1 + t) for t in range(a.H)]))
+            gl.append(np.stack([goal680(mo.qpos, mo.qvel, f0 + t) if a.teacher_base
+                                else mo.goal_window(f0 + 1 + t) for t in range(a.H)]))
         gseq = torch.as_tensor(np.stack(gl).astype(np.float32)).cuda()   # (N,H,730)
 
         prev = torch.zeros(Nb, 29, device="cuda")
@@ -265,7 +296,8 @@ def main():
                         q.copy_(q0 + alpha * (q - q0))
                     dev_val = float(((pol(g0, oh_start) - a_ref) ** 2).mean())
                 n_bt += 1
-            beta = 1.0  # 回溯是硬约束, beta 仅记录
+            if a.reset_adam_on_bt and n_bt > 0:
+                opt_p.state.clear()          # 动量指向原方向, 不清会再次过冲
         opt_v.zero_grad(); loss_v.backward()
         torch.nn.utils.clip_grad_norm_(crit.parameters(), 1.0); opt_v.step()
         J_val = float(J.mean().detach()); lv = float(loss_v.detach())

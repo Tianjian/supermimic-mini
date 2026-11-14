@@ -324,6 +324,7 @@ python exp/mpc_test.py --ckpt exp/runs/v2_best.pt --H 32 # 规划验证
 
 | 文件 | 内容 |
 |---|---|
+| **[docs/OVERNIGHT-PLAN.md](docs/OVERNIGHT-PLAN.md)** | **今夜 8h 无人值守执行计划（A/B/C 三阶段、门禁、工程保障）** |
 | **[docs/NEXT-PLAN.md](docs/NEXT-PLAN.md)** | **后续优化设计：阶段 A（消掉底座混杂）/ B（修 WM 幅度偏置）/ C（重试 BPTT）+ 门禁与成本** |
 | **[docs/CRITICAL-REVIEW.md](docs/CRITICAL-REVIEW.md)** | **对抗性自查：度量的 4 个缺陷、统计 3 项、P0/P1/P2 共 18 个可改进处** |
 | **[docs/REVIEW-AND-PLAN.md](docs/REVIEW-AND-PLAN.md)** | **六轮工作总结、关键数值汇总、诚实 gap 清单与 P0–P3 实验计划** |

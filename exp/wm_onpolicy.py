@@ -31,7 +31,8 @@ CLEAN = EnvCfg(obs_noise=False, reset_noise=False, domain_randomization=False, a
 
 
 @torch.no_grad()
-def rollout_policy(lib, pol, clips, n_envs_steps, rng, noise=0.1, dev="cuda"):
+def rollout_policy(lib, pol, clips, n_envs_steps, rng, noise=0.1, dev="cuda",
+                   mag_prob=0.0, mag_scale=3.0, teacher=False):
     """用策略在 clips 上 rollout, 返回 transitions (S71, A, X34, E)。"""
     S, A, X, E = [], [], [], []
     got = 0
@@ -44,10 +45,15 @@ def rollout_policy(lib, pol, clips, n_envs_steps, rng, noise=0.1, dev="cuda"):
         hist = np.repeat(obs[None], spec.HISTORY, 0)
         for t in range(100):
             fi = min(int(env.frame_idx), len(mo) - 12)
-            g = torch.as_tensor(mo.goal_window(fi), dtype=torch.float32).to(dev)[None]
+            from eval_pretrained import goal680 as _g680
+            gv = _g680(mo.qpos, mo.qvel, fi) if teacher else mo.goal_window(fi)
+            g = torch.as_tensor(gv, dtype=torch.float32).to(dev)[None]
             oh = torch.as_tensor(hist[None].astype(np.float32)).to(dev)
             a = pol(g, oh)[0].cpu().numpy()
-            a_exec = np.clip(a + noise * rng.standard_normal(spec.ACTION_DIM), -50, 50)
+            if mag_prob > 0 and rng.random() < mag_prob:
+                a_exec = rng.uniform(-mag_scale, mag_scale, spec.ACTION_DIM)
+            else:
+                a_exec = np.clip(a + noise * rng.standard_normal(spec.ACTION_DIM), -50, 50)
             s71 = to71(np.stack([env.state()]), DQ)[0]
             xi = np.asarray(env.xi, np.float64)
             obs, r, te, tr, _ = env.step(a_exec)
@@ -90,6 +96,31 @@ def eval_nse(wm, S, A, X, starts, k=32, bs=256):
     return acc/cnt
 
 
+@torch.no_grad()
+def eval_nse_buckets(wm, S, A, X, starts, k=32, bs=256):
+    """返回 (总 NSE, 小/中/大动作三分位 NSE8)。用于检查误差是否随幅度偏置。"""
+    mags = np.abs(A[starts]).mean(1)
+    q1, q2 = np.quantile(mags, [1/3, 2/3])
+    rows = {"all": [], "small": [], "mid": [], "large": []}
+    acc = np.zeros(k); accb = {kk: np.zeros(k) for kk in ("small", "mid", "large")}
+    cnt = 0; cntb = {kk: 0 for kk in ("small", "mid", "large")}
+    for i in range(0, len(starts), bs):
+        idb = starts[i:i+bs]
+        s = torch.as_tensor(S[idb]).cuda(); xi = torch.as_tensor(X[idb]).cuda()
+        p = s; row = np.zeros((len(idb), k))
+        for t in range(k):
+            p = wm.step(p, torch.as_tensor(A[idb+t]).cuda(), xi)
+            row[:, t] = wm.spec.nse(p, torch.as_tensor(S[idb+t+1]).cuda()).cpu().numpy()
+        acc += row.sum(0); cnt += len(idb)
+        for j, ii in enumerate(idb):
+            m = np.abs(A[ii]).mean()
+            kk = "small" if m < q1 else ("mid" if m < q2 else "large")
+            accb[kk] += row[j]; cntb[kk] += 1
+    tot = acc/cnt
+    buck = {kk: (accb[kk]/max(cntb[kk], 1)) for kk in accb}
+    return tot, buck, (q1, q2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default=str(ROOT/"exp/runs/v3_best.pt"))
@@ -102,6 +133,11 @@ def main():
     ap.add_argument("--online-size", type=int, default=200_000)
     ap.add_argument("--eval-every", type=int, default=5000)
     ap.add_argument("--out", default=str(ROOT/"exp/runs/wm_onpolicy.pt"))
+    ap.add_argument("--mag-prob", type=float, default=0.0,
+                    help="幅度课程: 该比例的控制步直接给大幅随机动作")
+    ap.add_argument("--mag-scale", type=float, default=3.0)
+    ap.add_argument("--teacher-policy", action="store_true",
+                    help="用教师网络(680 goal / 930 obs)作为被 rollout 的策略")
     a = ap.parse_args()
 
     torch.set_num_threads(2); torch.manual_seed(0); rng = np.random.default_rng(0)
@@ -110,10 +146,18 @@ def main():
     wm.load_state_dict(sd["wm"] if "wm" in sd else sd)
     print(f"WM loaded step={sd.get('step')} nse8={sd.get('nse8')}", flush=True)
 
-    pol = Policy(obs_dim=93, goal_dim=730, action_dim=29, hist=10).cuda()
-    ck = torch.load(a.policy, map_location="cuda", weights_only=False)
-    pol.load_state_dict(ck["policy"]); pol.eval()
-    print(f"policy loaded ({a.policy})", flush=True)
+    if a.teacher_policy:
+        from ac_bptt import TeacherBase
+        from eval_pretrained import Pol as _Pol
+        tck = torch.load(str(ROOT/"runs/pretrained/policy.pt"), map_location="cuda", weights_only=False)
+        _net = _Pol(); _net.load_state_dict(tck["policy"], strict=True)
+        pol = TeacherBase(_net).cuda().eval()
+        print("policy = TEACHER (680 goal / 930 obs)", flush=True)
+    else:
+        pol = Policy(obs_dim=93, goal_dim=730, action_dim=29, hist=10).cuda()
+        ck = torch.load(a.policy, map_location="cuda", weights_only=False)
+        pol.load_state_dict(ck["policy"]); pol.eval()
+        print(f"policy loaded ({a.policy})", flush=True)
 
     meta = json.load(open(DATA/"clips.json"))
     train_clips = [c for c in meta["train"]]
@@ -127,7 +171,7 @@ def main():
 
     # ---------- held-out on-policy 评测集 (用 held-out clip, 策略 rollout) ----------
     print("building held-out on-policy eval set ...", flush=True)
-    Sh, Ah, Xh, Eh = rollout_policy(lib_all, pol, hold_ids, 30_000, rng)
+    Sh, Ah, Xh, Eh = rollout_policy(lib_all, pol, hold_ids, 30_000, rng, teacher=a.teacher_policy)
     ev = make_eval_windows(Sh, Ah, Xh, Eh, k=32, nwin=512)
     base = eval_nse(wm, Sh, Ah, Xh, ev, k=32)
     print(f"[BASE] held-out on-policy NSE1={base[0]:.4f} NSE8={base[7]:.4f} NSE32={base[31]:.4f}", flush=True)
@@ -143,7 +187,9 @@ def main():
     # ---------- 在线数据 (策略 rollout) ----------
     print(f"collecting {a.online_size:,} on-policy transitions ...", flush=True)
     t0 = time.time()
-    So, Ao, Xo, Eo = rollout_policy(lib_all, pol, train_ids, a.online_size, rng)
+    So, Ao, Xo, Eo = rollout_policy(lib_all, pol, train_ids, a.online_size, rng,
+                                mag_prob=a.mag_prob, mag_scale=a.mag_scale,
+                                teacher=a.teacher_policy)
     vo = torch.as_tensor(np.nonzero(build_valid(Eo, [(0, len(Eo), np.concatenate([[0], np.cumsum(Eo.astype(np.int64))]))], a.k))[0], device="cuda")
     So_t = torch.as_tensor(So, device="cuda"); Ao_t = torch.as_tensor(Ao, device="cuda")
     Xo_t = torch.as_tensor(Xo, device="cuda")
@@ -184,8 +230,13 @@ def main():
                   f"({(time.time()-t0)/step*1000:.0f} ms/step)", flush=True)
         if step % a.eval_every == 0 or step == a.steps:
             r = eval_nse(wm, Sh, Ah, Xh, ev, k=32)
-            print(f"[EVAL {step}] on-policy NSE1={r[0]:.4f} NSE8={r[7]:.4f} NSE32={r[31]:.4f}", flush=True)
-            log.append({"step": step, "nse": r.tolist()})
+            rb, buck, qq = eval_nse_buckets(wm, Sh, Ah, Xh, ev, k=32)
+            ratio_mag = buck["large"][7] / max(buck["small"][7], 1e-9)
+            print(f"[EVAL {step}] NSE1={r[0]:.4f} NSE8={r[7]:.4f} NSE32={r[31]:.4f} | "
+                  f"mag small={buck['small'][7]:.4f} large={buck['large'][7]:.4f} "
+                  f"ratio={ratio_mag:.2f}", flush=True)
+            log.append({"step": step, "nse": r.tolist(), "mag_ratio": float(ratio_mag),
+                        "small8": float(buck["small"][7]), "large8": float(buck["large"][7])})
             if r[31] < best:
                 best = r[31]
                 torch.save({"wm": wm.state_dict(), "step": step, "nse32": float(r[31])}, a.out)
