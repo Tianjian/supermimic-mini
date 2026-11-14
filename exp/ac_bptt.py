@@ -57,9 +57,12 @@ def main():
                     help="P2 信赖域: 旧/新策略动作差的平方均值目标 (0=关闭)")
     ap.add_argument("--beta", type=float, default=1.0, help="KL 惩罚初值 (自适应缩放)")
     ap.add_argument("--kl-sigma", type=float, default=1.0, help="高斯近似的 action std")
+    ap.add_argument("--evalkit", action="store_true",
+                    help="用修正协议评测(裁切数据+固定步数归一化); 否则用旧协议")
+    ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
 
-    torch.set_num_threads(4); torch.manual_seed(0); np.random.seed(0)
+    torch.set_num_threads(4); torch.manual_seed(a.seed); np.random.seed(a.seed)
     wm = make_wm(34).to("cuda"); sd = torch.load(a.ckpt, map_location="cuda", weights_only=False)
     wm.load_state_dict(sd["wm"] if "wm" in sd else sd); wm.eval()
     for p in wm.parameters(): p.requires_grad_(False)
@@ -68,7 +71,7 @@ def main():
     fk = FKTable(XML, spec.TRACKED_BODIES, spec.JOINT_NAMES, device="cuda")
     meta = json.load(open(DATA/"clips.json"))
     lib = motion.MotionLibrary([motion.load_motion(str(MDIR/f"{c}.npz")) for c in meta["train"]])
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(a.seed)
 
     pol = Policy(obs_dim=93, goal_dim=730, action_dim=29, hist=10).cuda()
     if a.init:
@@ -137,24 +140,37 @@ def main():
     print(f"BC 后 raw 每步回报: {base:.5f}", flush=True)
 
     # ---------------- BPTT ----------------
-    # 标准化评测: 5 条 clip, frame 0, 500 步, ret/(0.1*steps) — 与 eval_pretrained 同口径
-    @torch.no_grad()
-    def eval_std(n_clips=5, steps=500):
-        env = TrackingEnv(XML, lib, CLEAN, seed=0); rets=[]
-        for ci in range(n_clips):
-            obs = env.reset(motion_id=ci, frame_idx=0)
-            hist = np.repeat(obs[None], 10, 0); ret=0.0; cnt=0
-            for t in range(steps):
-                fi = min(int(env.frame_idx), len(lib[ci])-1)
-                g = torch.as_tensor(lib[ci].goal_window(fi), dtype=torch.float32).cuda()[None]
+    # 标准化评测
+    if a.evalkit:
+        import evalkit as EK
+        lib_eval = EK.load_lib(ROOT/"assets/motions_trim")
+        def eval_std(n_clips=None, steps=500):
+            @torch.no_grad()
+            def fn(lb, ci, env, hist):
+                mo = lb[ci]; fi = min(int(env.frame_idx), len(mo)-1)
+                g = torch.as_tensor(mo.goal_window(fi), dtype=torch.float32).cuda()[None]
                 oh = torch.as_tensor(hist[None].astype(np.float32)).cuda()
-                act = pol(g, oh)[0].cpu().numpy()
-                obs, r, te, tr, _ = env.step(act)
-                hist = np.roll(hist,-1,0); hist[-1]=obs
-                ret += r; cnt += 1
-                if te or tr: break
-            rets.append(ret/(0.1*max(cnt-1,1)))
-        return float(np.mean(rets)), rets
+                return pol(g, oh)[0].cpu().numpy()
+            r = EK.evaluate(fn, lib_eval, steps=steps, seed=0)
+            return r["score"], list(r["per_clip"].values())
+    else:
+        def eval_std(n_clips=5, steps=500):
+            env = TrackingEnv(XML, lib, CLEAN, seed=0); rets=[]
+            for ci in range(n_clips):
+                obs = env.reset(motion_id=ci, frame_idx=0)
+                hist = np.repeat(obs[None], 10, 0); ret=0.0; cnt=0
+                for t in range(steps):
+                    fi = min(int(env.frame_idx), len(lib[ci])-1)
+                    g = torch.as_tensor(lib[ci].goal_window(fi), dtype=torch.float32).cuda()[None]
+                    oh = torch.as_tensor(hist[None].astype(np.float32)).cuda()
+                    act = pol(g, oh)[0].cpu().numpy()
+                    obs, r, te, tr, _ = env.step(act)
+                    hist = np.roll(hist,-1,0); hist[-1]=obs
+                    ret += r; cnt += 1
+                    if te or tr: break
+                rets.append(ret/(0.1*max(cnt-1,1)))
+            return float(np.mean(rets)), rets
+
     std0, _ = eval_std()
     print(f"标准化评测(5 clips) 起手: {std0:.4f}", flush=True)
 
