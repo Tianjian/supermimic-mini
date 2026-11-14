@@ -274,6 +274,7 @@ python exp/mpc_test.py --ckpt exp/runs/v2_best.pt --H 32 # 规划验证
 
 | 文件 | 内容 |
 |---|---|
+| **[docs/REVIEW-AND-PLAN.md](docs/REVIEW-AND-PLAN.md)** | **六轮工作总结、关键数值汇总、诚实 gap 清单与 P0–P3 实验计划** |
 | [docs/REWARD-HEAD-AND-AC.md](docs/REWARD-HEAD-AND-AC.md) | **第四轮**：可微 FK（1e-7）、8 项奖励规划迁移、完整 actor-critic、BONES-SEED 可行性 |
 | [docs/WM-BPTT-16GB.md](docs/WM-BPTT-16GB.md) | **阶段二主报告**：WM 精度、动作捕获 81%、梯度一致性、规划验证与瓶颈转移 |
 | [docs/FINAL-REPORT.md](docs/FINAL-REPORT.md) | 阶段一最终报告：思路、正/负结果、根因、gap |
