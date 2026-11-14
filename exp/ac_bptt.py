@@ -53,6 +53,10 @@ def main():
     ap.add_argument("--out", default=str(ROOT/"exp/runs/ac_bptt.json"))
     ap.add_argument("--init", default=None, help="从 BC 热启动 checkpoint 初始化策略")
     ap.add_argument("--skip-bc", action="store_true", help="有 --init 时跳过 BC")
+    ap.add_argument("--kl-target", type=float, default=0.02,
+                    help="P2 信赖域: 旧/新策略动作差的平方均值目标 (0=关闭)")
+    ap.add_argument("--beta", type=float, default=1.0, help="KL 惩罚初值 (自适应缩放)")
+    ap.add_argument("--kl-sigma", type=float, default=1.0, help="高斯近似的 action std")
     a = ap.parse_args()
 
     torch.set_num_threads(4); torch.manual_seed(0); np.random.seed(0)
@@ -154,9 +158,10 @@ def main():
     std0, _ = eval_std()
     print(f"标准化评测(5 clips) 起手: {std0:.4f}", flush=True)
 
-    print("BPTT ...", flush=True)
+    print(f"BPTT ... (KL/信赖域: target={a.kl_target}, sigma={a.kl_sigma})", flush=True)
     hist_log = []
     best_std = std0
+
     for it in range(a.iters):
         starts = []
         for _ in range(a.B):
@@ -182,6 +187,7 @@ def main():
             oh0.append(np.stack(hist))
         s = torch.as_tensor(np.stack(s0).astype(np.float32)).cuda()
         oh = torch.as_tensor(np.stack(oh0).astype(np.float32)).cuda()
+        oh_start = oh.clone()          # 信赖域回溯用的初始 obs 历史
         g0 = torch.as_tensor(np.stack(goals).astype(np.float32)).cuda()
         refb = {k: torch.as_tensor(np.stack([r[k] for r in refs]).astype(np.float32)).cuda()
                 for k in refs[0]}
@@ -224,19 +230,40 @@ def main():
         loss_p = -J.mean()
         loss_v = ((V - retd) ** 2).mean()
         opt_p.zero_grad(); loss_p.backward()
-        torch.nn.utils.clip_grad_norm_(pol.parameters(), 1.0); opt_p.step()
+        torch.nn.utils.clip_grad_norm_(pol.parameters(), 1.0)
+        # P2: 更新前记录参考动作, 更新后做信赖域回溯
+        if a.kl_target > 0:
+            with torch.no_grad():
+                a_ref = pol(g0, oh_start).detach()
+            old_par = [q.detach().clone() for q in pol.parameters()]
+        opt_p.step()
+        dev_val = 0.0
+        if a.kl_target > 0:
+            with torch.no_grad():
+                dev_val = float(((pol(g0, oh_start) - a_ref) ** 2).mean())
+            n_bt = 0
+            while dev_val > 1.5 * a.kl_target and n_bt < 6:
+                alpha = (a.kl_target / max(dev_val, 1e-12)) ** 0.5
+                with torch.no_grad():
+                    for q, q0 in zip(pol.parameters(), old_par):
+                        q.copy_(q0 + alpha * (q - q0))
+                    dev_val = float(((pol(g0, oh_start) - a_ref) ** 2).mean())
+                n_bt += 1
+            beta = 1.0  # 回溯是硬约束, beta 仅记录
         opt_v.zero_grad(); loss_v.backward()
         torch.nn.utils.clip_grad_norm_(crit.parameters(), 1.0); opt_v.step()
         J_val = float(J.mean().detach()); lv = float(loss_v.detach())
-        if (it+1) % 25 == 0:
+        if (it+1) % 10 == 0:
             e_std, e_rets = eval_std()
             if e_std > best_std:
                 best_std = e_std
                 torch.save({"policy": pol.state_dict(), "it": it+1, "std": e_std},
                            str(a.out).replace(".json", "_best.pt"))
             print(f"  it {it+1}/{a.iters} J={J_val:.4f} Vloss={lv:.4f} "
-                  f"std={e_std:.4f} (best {best_std:.4f}, base {std0:.4f}) ({time.time()-t0:.0f}s)", flush=True)
-            hist_log.append({"it": it+1, "J": J_val, "vloss": lv, "std": float(e_std)})
+                  f"std={e_std:.4f} (best {best_std:.4f}, base {std0:.4f}) "
+                  f"dev={dev_val:.4f} ({time.time()-t0:.0f}s)", flush=True)
+            hist_log.append({"it": it+1, "J": J_val, "vloss": lv, "std": float(e_std),
+                             "dev": dev_val})
 
 
     final = evaluate(n=10, steps=200)
