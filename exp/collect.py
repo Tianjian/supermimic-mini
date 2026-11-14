@@ -98,8 +98,14 @@ def worker(args):
 
 
 if __name__ == "__main__":
-    TOTAL = int(sys.argv[1]) if len(sys.argv) > 1 else 6_000_000
-    NW = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("total", nargs="?", type=int, default=6_000_000)
+    ap.add_argument("workers", nargs="?", type=int, default=10)
+    ap.add_argument("--shard", type=int, default=None,
+                    help="只重采某一个 shard（用于修复损坏分片；与全量采集同参数）")
+    a = ap.parse_args()
+    TOTAL, NW = a.total, a.workers
     allc = sorted(p.stem for p in MDIR.glob("*.npz"))
     # 留出 3 条 clip 做 held-out (dance2_subject1, fallAndGetUp1_subject1, sprint1_subject2)
     hold = [c for c in allc if c in ("dance2_subject1","fallAndGetUp1_subject1","sprint1_subject2")]
@@ -111,6 +117,9 @@ if __name__ == "__main__":
     for w in range(NW):
         sub = train[w::NW][:6] or train[:6]
         jobs.append((w, sub, per, 100+w, 0.10, 0.02, 2.0))
+    if a.shard is not None:
+        jobs = [jobs[a.shard]]
+        print(f"re-collect shard {a.shard} only", flush=True)
     t=time.time()
     ps=[mp.Process(target=worker, args=(j,)) for j in jobs]
     [p.start() for p in ps]; [p.join() for p in ps]

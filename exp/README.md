@@ -25,7 +25,11 @@ G1 资产与动作数据见仓库根 README 的 *Install* / *Data* 两节。本�
 | `wm_train.py` | WM 训练 + held-out NSE 评测；支持 `--resume` / `--xi-dim` / `DATA_DIR` |
 | `diag_sensitivity.py` | 动作捕获率 `capture = d_wm / d_true`（直接对比原报告 7.5%） |
 | `grad_corr_test.py` | 动作梯度一致性（Pearson / Spearman / 符号一致率） |
-| `mpc_test.py` | 用 WM 规划 H 步动作，放回真值仿真器验证收益 |
+| `mpc_test.py` | 用 WM 规划 H 步动作（**6 项**分析奖励），放回真值仿真器验证 |
+| `diff_fk.py` | **可微前向运动学 + 完整 8 项奖励**（补齐 14 个 body link 项） |
+| `test_reward8.py` | 对拍：FK vs MuJoCo、reward8 vs `TrackingEnv._reward`（期望 ~1e-7 / ~1e-8） |
+| `mpc_test8.py` | 用 **8 项**奖励做规划验证（H=8/16 显著，H=32 失效） |
+| `ac_bptt.py` | **完整 actor-critic**：Policy+Critic + WM71 + reward8 的 BPTT 循环 |
 | `diagnostics/bench_env_throughput.py` | 单进程 vs 多进程采集吞吐 |
 | `diagnostics/truth_action_sensitivity.py` | 真值仿真器的严格 1 步动作敏感度 |
 | `diagnostics/action_identifiability.py` | 动作在数据中的线性可识别性（按状态块） |
@@ -51,6 +55,22 @@ python exp/mpc_test.py --ckpt exp/runs/v2_best.pt --H 32 --N 32 --opt-steps 40
 
 - `exp/data/`、`exp/data_v2/` —— 采集分片（4M + 300k，各约 1.6–2.3 GB）
 - `exp/runs/` —— checkpoint（`*_best.pt` 约 35 MB、`*_last.pt` 约 70 MB）、训练日志、结果 json
+
+## 关键实验（第四轮）
+
+```bash
+# 先验证 FK 与奖励头是否精确（不通过就不要往下跑）
+python exp/test_reward8.py
+
+# 8 项奖励的规划验证
+python exp/mpc_test8.py --ckpt exp/runs/v2_best.pt --H 8  --N 48 --opt-steps 40
+python exp/mpc_test8.py --ckpt exp/runs/v2_best.pt --H 16 --N 48 --opt-steps 40
+
+# 完整 actor-critic（BC 热启动 + BPTT）
+python exp/ac_bptt.py --bc-steps 2500 --iters 200 --B 64 --H 16
+```
+
+结果与解读见 [`docs/REWARD-HEAD-AND-AC.md`](../docs/REWARD-HEAD-AND-AC.md)。
 
 ## 两个已修的坑
 
