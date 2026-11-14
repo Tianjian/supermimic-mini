@@ -99,6 +99,10 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--out", default=str(ROOT/"exp/runs/p0_distill.pt"))
     ap.add_argument("--eval-every", type=int, default=4000)
+    ap.add_argument("--n-eval-clips", type=int, default=5,
+                    help="评测用库序前 N 条; 训练时默认排除它们以避免泄漏")
+    ap.add_argument("--allow-leak", action="store_true",
+                    help="允许训练集包含评测 clip (默认禁止)")
     a = ap.parse_args()
 
     torch.set_num_threads(4); torch.manual_seed(0); rng = np.random.default_rng(0)
@@ -108,8 +112,11 @@ def main():
     lib = motion.MotionLibrary.from_dir(a.motion_dir)
     print(f"motions: {len(lib)}", flush=True)
 
+    eval_ids = list(range(a.n_eval_clips))
+    train_ids = list(range(len(lib))) if a.allow_leak else [i for i in range(len(lib)) if i not in eval_ids]
+    print(f"训练 clips: {len(train_ids)} 条 (排除评测 {eval_ids})  allow_leak={a.allow_leak}", flush=True)
     t0 = time.time()
-    H, G, A = collect(lib, teacher, a.episodes, a.ep_steps, rng)
+    H, G, A = collect(lib, teacher, a.episodes, a.ep_steps, rng, clips=train_ids)
     print(f"collected {len(A):,} teacher transitions in {time.time()-t0:.0f}s", flush=True)
     print(f"  action std={A.std():.3f}  |a| mean={np.abs(A).mean():.3f}", flush=True)
 
@@ -132,7 +139,7 @@ def main():
             print(f"  [{step:5d}] mse {loss.item():.4f} rmse {loss.item()**0.5:.4f} "
                   f"({(time.time()-t0)/step*1000:.0f} ms/step)", flush=True)
         if step % a.eval_every == 0 or step == a.steps:
-            sc, rets = evaluate_ours(pol, lib, dev=dev)
+            sc, rets = evaluate_ours(pol, lib, n_clips=a.n_eval_clips, dev=dev)
             print(f"  [EVAL {step}] raw policy 归一化 {sc:.4f}  "
                   f"({', '.join(f'{r:.3f}' for r in rets)})", flush=True)
             if sc > best:

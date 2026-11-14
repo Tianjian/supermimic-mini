@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--gamma", type=float, default=0.99)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--out", default=str(ROOT/"exp/runs/ac_bptt.json"))
+    ap.add_argument("--init", default=None, help="从 BC 热启动 checkpoint 初始化策略")
+    ap.add_argument("--skip-bc", action="store_true", help="有 --init 时跳过 BC")
     a = ap.parse_args()
 
     torch.set_num_threads(4); torch.manual_seed(0); np.random.seed(0)
@@ -65,6 +67,9 @@ def main():
     rng = np.random.default_rng(0)
 
     pol = Policy(obs_dim=93, goal_dim=730, action_dim=29, hist=10).cuda()
+    if a.init:
+        ck0 = torch.load(a.init, map_location="cuda", weights_only=False)
+        pol.load_state_dict(ck0["policy"]); print(f"pol init from {a.init} (score {ck0.get('score')})", flush=True)
     crit = Critic(state_dim=71, goal_dim=730, xi_dim=34).cuda()
     opt_p = torch.optim.Adam(pol.parameters(), lr=a.lr)
     opt_v = torch.optim.Adam(crit.parameters(), lr=a.lr)
@@ -77,7 +82,9 @@ def main():
         return e
 
     # ---------------- BC 热启动 ----------------
-    print("BC warm start ...", flush=True)
+    if a.skip_bc and a.init:
+        a.bc_steps = 0
+    print(f"BC warm start ({a.bc_steps} steps) ...", flush=True)
     t0 = time.time()
     for it in range(a.bc_steps):
         mid = int(rng.integers(0, len(lib))); mo = lib[mid]
@@ -126,8 +133,30 @@ def main():
     print(f"BC 后 raw 每步回报: {base:.5f}", flush=True)
 
     # ---------------- BPTT ----------------
+    # 标准化评测: 5 条 clip, frame 0, 500 步, ret/(0.1*steps) — 与 eval_pretrained 同口径
+    @torch.no_grad()
+    def eval_std(n_clips=5, steps=500):
+        env = TrackingEnv(XML, lib, CLEAN, seed=0); rets=[]
+        for ci in range(n_clips):
+            obs = env.reset(motion_id=ci, frame_idx=0)
+            hist = np.repeat(obs[None], 10, 0); ret=0.0; cnt=0
+            for t in range(steps):
+                fi = min(int(env.frame_idx), len(lib[ci])-1)
+                g = torch.as_tensor(lib[ci].goal_window(fi), dtype=torch.float32).cuda()[None]
+                oh = torch.as_tensor(hist[None].astype(np.float32)).cuda()
+                act = pol(g, oh)[0].cpu().numpy()
+                obs, r, te, tr, _ = env.step(act)
+                hist = np.roll(hist,-1,0); hist[-1]=obs
+                ret += r; cnt += 1
+                if te or tr: break
+            rets.append(ret/(0.1*max(cnt-1,1)))
+        return float(np.mean(rets)), rets
+    std0, _ = eval_std()
+    print(f"标准化评测(5 clips) 起手: {std0:.4f}", flush=True)
+
     print("BPTT ...", flush=True)
     hist_log = []
+    best_std = std0
     for it in range(a.iters):
         starts = []
         for _ in range(a.B):
@@ -200,16 +229,26 @@ def main():
         torch.nn.utils.clip_grad_norm_(crit.parameters(), 1.0); opt_v.step()
         J_val = float(J.mean().detach()); lv = float(loss_v.detach())
         if (it+1) % 25 == 0:
-            e_val = evaluate(n=6, steps=150)
+            e_std, e_rets = eval_std()
+            if e_std > best_std:
+                best_std = e_std
+                torch.save({"policy": pol.state_dict(), "it": it+1, "std": e_std},
+                           str(a.out).replace(".json", "_best.pt"))
             print(f"  it {it+1}/{a.iters} J={J_val:.4f} Vloss={lv:.4f} "
-                  f"raw/step={e_val:.5f} (base {base:.5f}) ({time.time()-t0:.0f}s)", flush=True)
-            hist_log.append({"it": it+1, "J": J_val, "vloss": lv, "raw": float(e_val)})
+                  f"std={e_std:.4f} (best {best_std:.4f}, base {std0:.4f}) ({time.time()-t0:.0f}s)", flush=True)
+            hist_log.append({"it": it+1, "J": J_val, "vloss": lv, "std": float(e_std)})
+
 
     final = evaluate(n=10, steps=200)
     print(f"\n最终 raw 每步回报: {final:.5f}  (BC 后 {base:.5f}, 相对 {100*(final-base)/base:+.2f}%)")
     json.dump({"base": float(base), "final": float(final), "log": hist_log,
                "H": a.H, "iters": a.iters, "wm_step": sd.get("step")},
               open(a.out, "w"), indent=1)
+    std1, std_rets = eval_std()
+    print(f"标准化评测(5 clips) 结束: {std1:.4f}  ({', '.join(f'{r:.3f}' for r in std_rets)})")
+    print(f"  teacher=0.469  BC起手={std0:.4f}  BPTT后={std1:.4f}  ({100*(std1-std0)/std0:+.1f}%)")
+    d = json.load(open(a.out)); d["std0"]=std0; d["std1"]=std1; d["std_rets"]=std_rets
+    json.dump(d, open(a.out,"w"), indent=1)
     print("saved", a.out)
 
 
