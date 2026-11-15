@@ -81,6 +81,10 @@ def main():
                     help="信赖域回溯后清空 Adam 动量 (评审 E2 修复)")
     ap.add_argument("--anchor-init", action="store_true",
                     help="信赖域锚定**初始**策略(限制累积漂移), 而非仅限制单轮变化")
+    ap.add_argument("--crit-bound", type=float, default=12.0,
+                    help="critic 输出上界; 理论最大回报 = 0.1/(1-gamma) = 10")
+    ap.add_argument("--bc-anchor", type=float, default=0.0,
+                    help="BC 锚定软正则: loss = -J + λ·MSE(π(s), π_anchor(s))，λ>0 启用")
     ap.add_argument("--act-clamp", type=float, default=0.0,
                     help="动作空间硬夹: 把想象动作夹在锚定策略动作 ±ε 内 (0=关闭)")
     a = ap.parse_args()
@@ -108,7 +112,7 @@ def main():
     if a.init:
         ck0 = torch.load(a.init, map_location="cuda", weights_only=False)
         pol.load_state_dict(ck0["policy"]); print(f"pol init from {a.init} (score {ck0.get('score')})", flush=True)
-    crit = Critic(state_dim=71, goal_dim=goal_dim, xi_dim=34).cuda()
+    crit = Critic(state_dim=71, goal_dim=goal_dim, xi_dim=34, bound=a.crit_bound).cuda()
     opt_p = torch.optim.Adam(pol.parameters(), lr=a.lr)
     opt_v = torch.optim.Adam(crit.parameters(), lr=a.lr)
     xi = torch.as_tensor(np.concatenate([[1., 1.], np.zeros(29), np.zeros(3)]),
@@ -209,9 +213,9 @@ def main():
     print(f"标准化评测(5 clips) 起手: {std0:.4f}", flush=True)
 
     print(f"BPTT ... (KL/信赖域: target={a.kl_target}, sigma={a.kl_sigma}, "
-          f"anchor_init={a.anchor_init})", flush=True)
+          f"anchor_init={a.anchor_init}, bc_anchor={a.bc_anchor})", flush=True)
     anchor_net = None
-    if a.anchor_init or a.act_clamp > 0:
+    if a.anchor_init or a.act_clamp > 0 or a.bc_anchor > 0:
         a.anchor_init = True
         import copy as _copy
         anchor_net = _copy.deepcopy(pol).eval()
@@ -272,12 +276,20 @@ def main():
 
         prev = torch.zeros(Nb, 29, device="cuda")
         Rs = []; Vs = []
+        clamp_fracs = []
+        bc_devs = []
         for t in range(a.H):
             act = pol(gseq[:, t], oh)
+            if a.bc_anchor > 0 and anchor_net is not None:
+                with torch.no_grad():
+                    a_bc = anchor_net(gseq[:, t], oh)
+                bc_devs.append(((act - a_bc) ** 2).mean())
             if a.act_clamp > 0 and anchor_net is not None:
                 with torch.no_grad():
                     a_anc = anchor_net(gseq[:, t], oh)
-                act = torch.clamp(act, a_anc - a.act_clamp, a_anc + a.act_clamp)
+                _lo, _hi = a_anc - a.act_clamp, a_anc + a.act_clamp
+                clamp_fracs.append(float(((act.detach() < _lo) | (act.detach() > _hi)).float().mean()))
+                act = torch.clamp(act, _lo, _hi)
             s = wm.step(s, act, xi_b)
             r = D.reward8(s, act, prev, {k: v[:, t] for k, v in refb.items()}, fk)
             Rs.append(r)
@@ -301,8 +313,11 @@ def main():
                 acc = Rd[:, t] + a.gamma * acc
                 retd[:, t] = acc
         loss_p = -J.mean()
+        if a.bc_anchor > 0 and bc_devs:
+            loss_p = loss_p + a.bc_anchor * torch.stack(bc_devs).mean()
         loss_v = ((V - retd) ** 2).mean()
         opt_p.zero_grad(); loss_p.backward()
+        _gn = sum(float(q.grad.norm())**2 for q in pol.parameters() if q.grad is not None) ** 0.5
         torch.nn.utils.clip_grad_norm_(pol.parameters(), 1.0)
         # P2: 更新前记录参考动作, 更新后做信赖域回溯
         if a.kl_target > 0:
@@ -337,7 +352,8 @@ def main():
                            str(a.out).replace(".json", "_best.pt"))
             print(f"  it {it+1}/{a.iters} J={J_val:.4f} Vloss={lv:.4f} "
                   f"std={e_std:.4f} (best {best_std:.4f}, base {std0:.4f}) "
-                  f"dev={dev_val:.4f} ({time.time()-t0:.0f}s)", flush=True)
+                  f"dev={dev_val:.4f} clamp={100*np.mean(clamp_fracs) if clamp_fracs else 0:.0f}% "
+                  f"|g|={_gn:.2e} |V|={float(Vs[-1].abs().mean().detach()):.2f} ({time.time()-t0:.0f}s)", flush=True)
             hist_log.append({"it": it+1, "J": J_val, "vloss": lv, "std": float(e_std),
                              "dev": dev_val})
 

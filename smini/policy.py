@@ -112,12 +112,14 @@ class Critic(nn.Module):
         xi_dim: int = spec.XI_DIM,
         hidden: tuple[int, ...] = (512, 256),
         norm: bool = False,
+        bound: float = 5.0,
     ):
         super().__init__()
         self.state_dim = int(state_dim)
         self.goal_dim = int(goal_dim)
         self.xi_dim = int(xi_dim)
         self.hidden = tuple(int(h) for h in hidden)
+        self.bound = float(bound)
         self.net = mlp([state_dim + goal_dim + xi_dim, *self.hidden, 1], norm=norm)
         # zero-init value head: the bootstrap starts at 0 (returns = reward sum)
         last = self.net[-1]
@@ -138,7 +140,7 @@ class Critic(nn.Module):
         gn = norm.norm(goal, self.g_mean, self.g_std)
         xn = norm.norm(xi, self.x_mean, self.x_std)
         # bounded value: prevents the critic-bootstrap feedback loop from diverging
-        return 5.0 * torch.tanh(self.net(torch.cat([sn, gn, xn], dim=-1)))
+        return self.bound * torch.tanh(self.net(torch.cat([sn, gn, xn], dim=-1)))
 
     def set_norm(self, s_mean, s_std, g_mean, g_std, x_mean, x_std) -> None:
         norm.set_buffer(self, "s", s_mean, s_std)
