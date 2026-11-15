@@ -41,6 +41,7 @@ docs/
 |---|---|---|
 | [compute-precision-attribution.md](findings/compute-precision-attribution.md) | 11-15 | **核心**。与论文/开源复现逐维对照，把失败归因到「算力 → 精度 → 机制」，含 68 万倍想象样本差距的换算 |
 | [mechanism-ablation-p0-p2.md](findings/mechanism-ablation-p0-p2.md) | 11-15 | **核心**。实现可微 bootstrap / survival weight / 在线循环并消融：三者装回去仍无增益，它们是「精度放大器」而非「修复项」 |
+| [phase3-justification.md](findings/phase3-justification.md) | 11-15 | **阶段三是否必要**。预实验：从教师动作出发规划，H=8 +6.68%（胜率 100%）、H=16 +5.70%，但 H=32 归零 → 规划型 BPTT 的视野上限约 H=16 |
 | [zero-distill-base-collapses.md](findings/zero-distill-base-collapses.md) | 11-14 | 用零蒸馏误差的教师做底座，BPTT 仍把它打崩 −79.8%（3/3 种子），排除「底座太弱」 |
 | [overnight-abcde.md](findings/overnight-abcde.md) | 11-15 | 一夜五组实验（A/B/C/D/E）的完整数据与自我修正记录 |
 | [phase1-final-report.md](findings/phase1-final-report.md) | 11-10 | 阶段一（RTX 2060 6 GB）总报告 |
