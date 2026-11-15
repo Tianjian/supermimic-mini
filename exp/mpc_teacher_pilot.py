@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--bound", type=float, default=0.3)
     ap.add_argument("--out", default="exp/runs/mpc_teacher_pilot.json")
+    ap.add_argument("--controls", action="store_true",
+                    help="额外跑随机扰动/常数缩放对照, 并统计规划实际改动了什么")
     a = ap.parse_args()
     torch.set_num_threads(4)
     rng = np.random.default_rng(0)
@@ -177,8 +179,33 @@ def main():
         t = stats.ttest_rel(v, b)
         print(f"  {nm:14s} {d.mean():+.5f} ({d.mean()/b.mean()*100:+.2f}%)  "
               f"胜率 {(d>0).mean()*100:.0f}%  p={t.pvalue:.4g}")
+    extra = {}
+    if a.controls:
+        print("\n===== 对照: 扰动本身能带来多少收益? =====")
+        rng2 = np.random.default_rng(7)
+        rs = []
+        for k in range(5):
+            pert = tc_a.cpu().numpy() + rng2.uniform(-a.bound, a.bound, tc_a.shape)
+            rs.append(true_rollout(pert).mean())
+        print(f"  随机扰动 ±{a.bound} (5 次均值)  {np.mean(rs):.5f}  相对教师 "
+              f"{100*(np.mean(rs)-base_tc.mean())/base_tc.mean():+.2f}%")
+        extra["random_perturb"] = list(map(float, rs))
+        for sc in (0.95, 0.98, 1.02, 1.05):
+            v = true_rollout(tc_a.cpu().numpy() * sc).mean()
+            print(f"  常数缩放 x{sc:<4}            {v:.5f}  相对教师 "
+                  f"{100*(v-base_tc.mean())/base_tc.mean():+.2f}%")
+            extra[f"scale_{sc}"] = float(v)
+        pt = plan_from(tc_a, "stats-only")
+        da = pt - tc_a.cpu().numpy()
+        print(f"\n  规划实际改动: |da| 均值 {np.abs(da).mean():.4f} (bound={a.bound})"
+              f"  |a| 教师 {np.abs(tc_a.cpu().numpy()).mean():.3f} -> 规划 {np.abs(pt).mean():.3f}")
+        extra["delta_abs_mean"] = float(np.abs(da).mean())
+        extra["plan_abs_mean"] = float(np.abs(pt).mean())
+        extra["teacher_abs_mean"] = float(np.abs(tc_a.cpu().numpy()).mean())
+
     json.dump({"H": H, "N": N, "pd": base_pd.tolist(), "teacher": base_tc.tolist(),
-               "plan_from_pd": plan_pd.tolist(), "plan_from_teacher": plan_tc.tolist()},
+               "plan_from_pd": plan_pd.tolist(), "plan_from_teacher": plan_tc.tolist(),
+               **extra},
               open(ROOT/a.out, "w"), indent=1)
     print(f"\nsaved {a.out}")
 
