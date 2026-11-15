@@ -223,6 +223,7 @@ MUJOCO_GL=glfw python exp/render_compare.py --clip walk1_subject1 --steps 300
 | [reviews/critical-review-18-items](docs/reviews/critical-review-18-items.md) | 18 条自我评审，含被推翻的 3 个早期论断 |
 | [technical/wm-bptt-16gb](docs/technical/wm-bptt-16gb.md) | 阶段二的世界模型与 BPTT 实现细节 |
 | [demo/README](docs/demo/README.md) | 全部演示视频与渲染命令 |
+| [CHANGELOG](CHANGELOG.md) | 版本记录与各阶段结论 |
 
 ---
 
