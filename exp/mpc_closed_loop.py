@@ -71,6 +71,7 @@ def main():
         obs = [e.reset(motion_id=ci, frame_idx=0) for e, ci in zip(envs, clips)]
         hist = [np.repeat(o[None], spec.HISTORY, 0) for o in obs]
         rets = np.zeros(n); surv = np.zeros(n, dtype=int); alive = np.ones(n, bool)
+        rew_hist = np.zeros((a.steps, n), dtype=np.float32)
         raw = np.zeros((n, a.H, 29), dtype=np.float32)
         prev_a = np.zeros((n, 29), dtype=np.float32)
         prev_a0 = np.zeros((n, 29), dtype=np.float32)
@@ -139,6 +140,7 @@ def main():
                     new_obs.append(obs[i]); continue
                 o, r, te, tr, _ = e.step(act[i])
                 rets[i] += float(r); surv[i] += 1
+                rew_hist[step, i] = float(r)
                 hist[i] = np.roll(hist[i], -1, 0); hist[i][-1] = o
                 new_obs.append(o)
                 if te or tr: alive[i] = False
@@ -161,7 +163,8 @@ def main():
     json.dump({"mode": a.mode, "H": a.H, "bound": a.bound, "opt_steps": a.opt_steps,
                "every": a.every, "clips": [lib.motions[i].name for i in clips],
                "scores": sc.tolist(), "surv": sv.tolist(),
-               "mean": float(sc.mean()), "surv_mean": float(sv.mean())},
+               "mean": float(sc.mean()), "surv_mean": float(sv.mean()),
+               "rew_hist": rew_hist.tolist()},
               open(ROOT/a.out, "w"), indent=1)
     print(f"saved {a.out}")
 
