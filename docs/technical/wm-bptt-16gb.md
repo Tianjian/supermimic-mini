@@ -150,7 +150,7 @@ Spearman  ρ = +0.608  (p = 8.8e-34)
 
 ## 9. 复跑
 
-见 [`exp/README.md`](../exp/README.md)。最短路径：
+见 [`exp/README.md`](../../exp/README.md)。最短路径：
 
 ```bash
 V2=1 python exp/collect.py 4000000 10

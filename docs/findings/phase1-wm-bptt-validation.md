@@ -1,7 +1,7 @@
 # WM / BPTT 机制验证结果
 
 > 日期：2026-11-09
-> 方案：[WM-BPTT-PLAN.md](WM-BPTT-PLAN.md)
+> 方案：[WM-BPTT-PLAN.md](../archive/wm-bptt-plan.md)
 > 数据：`assets/motions_trim/`（5 clips，已裁 T-pose）；策略侧接受 teacher+residual env8 **0.466** 收口。
 
 ## ⚠️ 重大更正（2026-11-09 复查后）

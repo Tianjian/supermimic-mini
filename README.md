@@ -189,18 +189,18 @@ MUJOCO_GL=glfw python exp/render_compare.py --clip walk1_subject1 --steps 300
 
 ## 9. 文档索引
 
+完整导航见 **[docs/README.md](docs/README.md)**。核心几篇：
+
 | 文档 | 内容 |
 |---|---|
-| [docs/GLOBAL-REVIEW.md](docs/GLOBAL-REVIEW.md) | 与论文/开源复现的逐维对照，归因：算力 vs 设计 vs 数据 |
-| [docs/P0-P2-REVIEW.md](docs/P0-P2-REVIEW.md) | 三个缺失机制的实现、消融与"精度放大器"结论 |
-| [docs/CRITICAL-REVIEW.md](docs/CRITICAL-REVIEW.md) | 18 条自我评审，含被推翻的 3 个早期论断 |
-| [docs/OVERNIGHT-REPORT.md](docs/OVERNIGHT-REPORT.md) | A/B/C/D/E 五组实验的原始数据 |
-| [docs/A1-FINDING.md](docs/A1-FINDING.md) | 零蒸馏误差底座也会被 BPTT 打崩 |
-| [docs/WM-BPTT-16GB.md](docs/WM-BPTT-16GB.md) | 阶段二的世界模型与 BPTT 实现细节 |
-| [docs/REVIEW-AND-PLAN.md](docs/REVIEW-AND-PLAN.md) | P0–P3 路线与里程碑 |
-| [docs/demo/README.md](docs/demo/README.md) | 全部演示视频与渲染命令 |
-
-代码：`exp/`（采集 / 训练 / 评测 / BPTT / 渲染），`smini/`（环境与模型），`scripts/`（教师权重适配与批量评测）。
+| [findings/compute-precision-attribution](docs/findings/compute-precision-attribution.md) | **算力 → 精度 → 机制**的归因分析（与论文逐维对照） |
+| [findings/mechanism-ablation-p0-p2](docs/findings/mechanism-ablation-p0-p2.md) | 三个缺失机制的实现与消融："精度放大器"结论 |
+| [findings/zero-distill-base-collapses](docs/findings/zero-distill-base-collapses.md) | 零蒸馏误差的教师底座也会被 BPTT 打崩 |
+| [findings/phase1-final-report](docs/findings/phase1-final-report.md) | 阶段一（6 GB）总报告 |
+| [findings/phase1-wm-bptt-validation](docs/findings/phase1-wm-bptt-validation.md) | 阶段一的机制验证数据 |
+| [reviews/critical-review-18-items](docs/reviews/critical-review-18-items.md) | 18 条自我评审，含被推翻的 3 个早期论断 |
+| [technical/wm-bptt-16gb](docs/technical/wm-bptt-16gb.md) | 阶段二的世界模型与 BPTT 实现细节 |
+| [demo/README](docs/demo/README.md) | 全部演示视频与渲染命令 |
 
 ---
 

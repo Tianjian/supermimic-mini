@@ -1,4 +1,4 @@
-"""汇总 overnight 结果 -> docs/OVERNIGHT-REPORT.md"""
+"""汇总 overnight 结果 -> docs/findings/overnight-abcde.md"""
 import json, sys
 from pathlib import Path
 import numpy as np
@@ -6,7 +6,7 @@ from scipy import stats
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT/"exp"/"runs"
-OUT = ROOT/"docs"/"OVERNIGHT-REPORT.md"
+OUT = ROOT/"docs"/"findings"/"overnight-abcde.md"
 BASE_TEACHER = 0.3798      # 教师底座在 evalkit 协议下的起手分
 
 

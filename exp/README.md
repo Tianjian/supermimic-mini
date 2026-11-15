@@ -1,6 +1,6 @@
 # exp/ —— 16 GB 卡上的 WM+BPTT 复现实验
 
-结论与完整分析见 [`docs/WM-BPTT-16GB.md`](../docs/WM-BPTT-16GB.md)。这里只放可复跑的脚本。
+结论与完整分析见 [`docs/technical/wm-bptt-16gb.md`](../docs/technical/wm-bptt-16gb.md)。这里只放可复跑的脚本。
 
 ## 硬件与依赖
 
@@ -70,7 +70,7 @@ python exp/mpc_test8.py --ckpt exp/runs/v2_best.pt --H 16 --N 48 --opt-steps 40
 python exp/ac_bptt.py --bc-steps 2500 --iters 200 --B 64 --H 16
 ```
 
-结果与解读见 [`docs/REWARD-HEAD-AND-AC.md`](../docs/REWARD-HEAD-AND-AC.md)。
+结果与解读见 [`docs/technical/reward-head-and-actor-critic.md`](../docs/technical/reward-head-and-actor-critic.md)。
 
 ## 两个已修的坑
 
