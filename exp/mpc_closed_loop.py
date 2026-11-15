@@ -38,6 +38,11 @@ def main():
     ap.add_argument("--steps", type=int, default=STEPS)
     ap.add_argument("--mode", default="plan", choices=["plan", "teacher", "perturb"])
     ap.add_argument("--seeds", type=int, default=1)
+    ap.add_argument("--clips", default="", help="逗号分隔的 clip 名, 空=全部 6 条")
+    ap.add_argument("--smooth", type=float, default=0.0,
+                    help="规划目标里惩罚首动作与上一拍动作的差 (抑制抖动)")
+    ap.add_argument("--ema", type=float, default=0.0,
+                    help="执行前对动作做指数滑动平均: a = ema*a_plan + (1-ema)*a_prev")
     ap.add_argument("--out", default="exp/runs/mpc_closed.json")
     a = ap.parse_args()
     torch.set_num_threads(4)
@@ -52,8 +57,9 @@ def main():
                          dtype=torch.float32).to(DEV)[None]
 
     lib = EK.load_lib(ROOT/"assets/motions_trim")
-    clips = [i for i, m in enumerate(lib.motions) if m.name in EK.EVAL_CLIPS]
-    clips = sorted(clips, key=lambda i: EK.EVAL_CLIPS.index(lib.motions[i].name))
+    want = [c.strip() for c in a.clips.split(",") if c.strip()] or list(EK.EVAL_CLIPS)
+    clips = [i for i, m in enumerate(lib.motions) if m.name in want]
+    clips = sorted(clips, key=lambda i: want.index(lib.motions[i].name))
     n = len(clips)
     print(f"[{a.mode}] H={a.H} bound={a.bound} K={a.opt_steps} every={a.every} "
           f"clips={[lib.motions[i].name for i in clips]}", flush=True)
@@ -67,6 +73,7 @@ def main():
         rets = np.zeros(n); surv = np.zeros(n, dtype=int); alive = np.ones(n, bool)
         raw = np.zeros((n, a.H, 29), dtype=np.float32)
         prev_a = np.zeros((n, 29), dtype=np.float32)
+        prev_a0 = np.zeros((n, 29), dtype=np.float32)
         t0 = time.time()
         for step in range(a.steps):
             # --- 教师中心动作 + goal/ref ---
@@ -100,6 +107,7 @@ def main():
                     gseq = torch.as_tensor(np.stack(gl).astype(np.float32)).to(DEV)
                     # 锚点: 当前教师动作复制 H 份（每步重规划、只执行首动作，后段锚点影响很小）
                     a_tc_t = torch.as_tensor(a_tc).to(DEV).unsqueeze(1).repeat(1, a.H, 1)
+                    pv0 = torch.as_tensor(prev_a0).to(DEV)
                     r0 = torch.tensor(raw, device=DEV, requires_grad=True)
                     opt = torch.optim.Adam([r0], lr=a.lr)
                     xi_b = xi.expand(n, -1)
@@ -111,12 +119,19 @@ def main():
                             r = D.reward8(s, acts[:, t], pv, {k: v[:, t] for k, v in refb.items()}, fk)
                             tot = tot + r.sum()
                             pv = acts[:, t]
+                        if a.smooth > 0:
+                            tot = tot - a.smooth * ((acts[:, 0] - pv0) ** 2).sum()
                         opt.zero_grad(); (-tot).backward(); opt.step()
                     with torch.no_grad():
                         sol = (a_tc_t + a.bound * torch.tanh(r0)).cpu().numpy()
                     # 热启动: 平移一拍
-                    raw = np.concatenate([sol[:, 1:], sol[:, -1:]], axis=1).astype(np.float32)
-                act = raw[:, 0].copy()
+                    k = a.every
+                    raw = np.concatenate([sol[:, k:], np.repeat(sol[:, -1:], k, axis=1)],
+                                         axis=1)[:, :a.H].astype(np.float32)
+                act = raw[:, step % a.every].copy()
+            # --- EMA 平滑后再执行 ---
+            if a.ema > 0 and a.mode == "plan":
+                act = a.ema * act + (1 - a.ema) * prev_a0
             # --- 执行 ---
             new_obs = []
             for i, (e, ci) in enumerate(zip(envs, clips)):
@@ -128,7 +143,7 @@ def main():
                 new_obs.append(o)
                 if te or tr: alive[i] = False
             obs = new_obs
-            prev_a = act
+            prev_a = act; prev_a0 = act
             if step % 50 == 0:
                 print(f"  s{seed} step {step} alive={alive.sum()}/{n} "
                       f"ret={rets.sum():.2f} ({time.time()-t0:.0f}s)", flush=True)
