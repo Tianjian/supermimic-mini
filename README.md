@@ -324,6 +324,7 @@ python exp/mpc_test.py --ckpt exp/runs/v2_best.pt --H 32 # 规划验证
 
 | 文件 | 内容 |
 |---|---|
+| **[docs/GLOBAL-REVIEW.md](docs/GLOBAL-REVIEW.md)** | **算力/显存到底限制了什么：与论文/开源复现的全局对照与归因** |
 | **[docs/MORNING-PLAN.md](docs/MORNING-PLAN.md)** | **昨晚评审（3 处实现/口径问题）+ 今早 M1–M4 实验策略** |
 | **[docs/OVERNIGHT-REPORT.md](docs/OVERNIGHT-REPORT.md)** | **一夜四阶段结果：BPTT 崩塌根因 = 动作空间逃逸；动作夹具把 −80% 变 −0.8%** |
 | **[docs/A1-FINDING.md](docs/A1-FINDING.md)** | **A1：零蒸馏误差的教师底座也会被 BPTT 打崩（−79.8%）** |
