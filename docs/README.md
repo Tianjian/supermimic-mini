@@ -32,6 +32,7 @@ docs/
 | BPTT 为什么会崩、怎么稳 | [technical/bptt-stability](technical/bptt-stability.md) |
 | 我在设计上犯了哪些错 | [reviews/critical-review-18-items](reviews/critical-review-18-items.md) |
 | 演示视频 | [demo/README](demo/README.md) |
+| 数据图表 | `figures/`（f1 视野衰减 / f2 扰动对照 / f3 K 敏感性 / f4 逐步曲线 / f5 排行榜） |
 
 ---
 
