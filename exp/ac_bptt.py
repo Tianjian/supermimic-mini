@@ -47,6 +47,17 @@ class TeacherBase(torch.nn.Module):
         return self.pol(goal680x, x)
 
 
+def soft_done(s71, ref_t, h_thresh=0.25, tilt_thresh=0.8, tau_h=0.02, tau_t=0.05):
+    """可微终止概率: 与 env 的终止条件同构 (高度误差 / 倾角误差), 用 sigmoid 软化。"""
+    dz = (s71[:, 2] - ref_t["root_pos"][:, 2]).abs()
+    R = D.quat_to_mat(s71[:, 3:7])
+    R_ref = ref_t["root_R"]
+    # projected_gravity 的 z 分量 = -R[2,2]
+    tilt = (R[:, 2, 2] - R_ref[:, 2, 2]).abs()
+    d = torch.sigmoid((dz - h_thresh) / tau_h) + torch.sigmoid((tilt - tilt_thresh) / tau_t)
+    return d.clamp(0.0, 1.0)
+
+
 def obs71(s71, prev_a):
     """71 维状态 -> 93 维观测 (与 spec.pack_obs 同构)。"""
     qj = s71[:, 7:36]; qd = s71[:, 42:71]
@@ -81,6 +92,23 @@ def main():
                     help="信赖域回溯后清空 Adam 动量 (评审 E2 修复)")
     ap.add_argument("--anchor-init", action="store_true",
                     help="信赖域锚定**初始**策略(限制累积漂移), 而非仅限制单轮变化")
+    ap.add_argument("--critic-epochs", type=int, default=5,
+                    help="论文: 每轮 5 epochs x 4 minibatches = 20 次 critic 更新")
+    ap.add_argument("--critic-minibatches", type=int, default=4)
+    ap.add_argument("--online-every", type=int, default=0,
+                    help="P2: 每 N 轮采一次 on-policy 数据并微调 WM (0=关闭)")
+    ap.add_argument("--online-size", type=int, default=20000)
+    ap.add_argument("--wm-steps", type=int, default=1500, help="每次交错微调 WM 的梯度步数")
+    ap.add_argument("--wm-lr", type=float, default=5e-5)
+    ap.add_argument("--wm-batch", type=int, default=2048)
+    ap.add_argument("--critic-warmup", type=int, default=0,
+                    help="前 N 轮只训 critic、不动策略, 之后才开 P0 的 bootstrap 梯度")
+    ap.add_argument("--bootstrap-grad", type=int, default=1,
+                    help="P0: 1=∇θ 穿过 γ^H V(ŝ_H)（论文）; 0=detach（旧实现）")
+    ap.add_argument("--survival", type=int, default=1,
+                    help="P1: 用可微 survival weight c_t 折现'快要摔倒'的未来 (1=开)")
+    ap.add_argument("--term-thresh", type=float, default=0.25, help="高度终止阈值")
+    ap.add_argument("--tilt-thresh", type=float, default=0.8, help="倾角终止阈值")
     ap.add_argument("--crit-bound", type=float, default=12.0,
                     help="critic 输出上界; 理论最大回报 = 0.1/(1-gamma) = 10")
     ap.add_argument("--bc-anchor", type=float, default=0.0,
@@ -221,10 +249,74 @@ def main():
         anchor_net = _copy.deepcopy(pol).eval()
         for _p in anchor_net.parameters(): _p.requires_grad_(False)
         print("  trust region anchored to INIT policy", flush=True)
+    # ---------------- P2: 交错在线循环所需 ----
+    online = None
+    if a.online_every > 0:
+        import wm_train as _wt
+        from wm_onpolicy import rollout_policy as _roll
+        _wt.DATA = ROOT/"exp"/"data_v2"
+        Sf, Af, Xf, Ef, allvf = _wt.load_shards("shard_")
+        vf = torch.as_tensor(np.nonzero(_wt.build_valid(Ef, allvf, 8))[0], device="cuda")
+        Sf_t = torch.as_tensor(Sf, device="cuda"); Af_t = torch.as_tensor(Af, device="cuda")
+        Xf_t = torch.as_tensor(Xf, device="cuda")
+        opt_wm = torch.optim.Adam(wm.parameters(), lr=a.wm_lr)
+        scaler_wm = torch.amp.GradScaler("cuda", enabled=True)
+        for q in wm.parameters(): q.requires_grad_(True)
+        allc = sorted(pp.stem for pp in (ROOT/"assets/motions").glob("*.npz"))
+        online = {"lib_all": motion.MotionLibrary([motion.load_motion(
+                        str(ROOT/"assets/motions"/f"{c}.npz")) for c in allc]),
+                  "clips": list(range(len(allc))), "vf": vf, "Sf": Sf_t, "Af": Af_t,
+                  "Xf": Xf_t, "opt": opt_wm, "scaler": scaler_wm}
+        print(f"P2 在线循环已启用: 每 {a.online_every} 轮采 {a.online_size} 条 + 微调 {a.wm_steps} 步",
+              flush=True)
+
+        def online_update(round_i):
+            t0 = time.time()
+            for q in wm.parameters(): q.requires_grad_(True)
+            rng_o = np.random.default_rng(1000 + round_i)
+            with torch.no_grad():
+                pass
+            So, Ao, Xo, Eo = _roll(online["lib_all"], pol, online["clips"],
+                                   a.online_size, rng_o, noise=0.1, teacher=True)
+            So_t = torch.as_tensor(So, device="cuda"); Ao_t = torch.as_tensor(Ao, device="cuda")
+            Xo_t = torch.as_tensor(Xo, device="cuda")
+            cs = np.concatenate([[0], np.cumsum(Eo.astype(np.int64))])
+            idx_all = np.arange(0, len(Eo) - 8)
+            okm = (cs[idx_all + 8] - cs[idx_all]) == 0
+            vo = torch.as_tensor(idx_all[okm], device="cuda")
+            n_on = a.wm_batch // 2
+            for _ in range(a.wm_steps):
+                io = vo[torch.randint(0, len(vo), (n_on,), device="cuda")]
+                ixf = online["vf"][torch.randint(0, len(online["vf"]),
+                                                 (a.wm_batch - n_on,), device="cuda")]
+                Sb = torch.cat([torch.stack([So_t[io + j] for j in range(9)], 1),
+                                torch.stack([online["Sf"][ixf + j] for j in range(9)], 1)], 0)
+                Ab = torch.cat([torch.stack([Ao_t[io + j] for j in range(8)], 1),
+                                torch.stack([online["Af"][ixf + j] for j in range(8)], 1)], 0)
+                Xb = torch.cat([Xo_t[io], online["Xf"][ixf]], 0)
+                loss = 0.0
+                with torch.autocast("cuda", dtype=torch.float16):
+                    pp_ = Sb[:, 0]
+                    for j in range(8):
+                        pp_ = wm.step(pp_, Ab[:, j], Xb)
+                        e = wm.spec.error_vector(pp_, Sb[:, j+1])
+                        loss = loss + (e*e).mean()
+                loss = loss / 8
+                online["opt"].zero_grad(set_to_none=True)
+                online["scaler"].scale(loss).backward()
+                online["scaler"].unscale_(online["opt"])
+                torch.nn.utils.clip_grad_norm_(wm.parameters(), 1.0)
+                online["scaler"].step(online["opt"]); online["scaler"].update()
+            wm.eval()
+            for q in wm.parameters(): q.requires_grad_(False)
+            print(f"  [P2 round {round_i}] 采 {len(So):,} 条 + 微调 {a.wm_steps} 步，"
+                  f"WM loss {float(loss.detach()):.4f} ({time.time()-t0:.0f}s)", flush=True)
     hist_log = []
     best_std = std0
 
     for it in range(a.iters):
+        if online is not None and it > 0 and it % a.online_every == 0:
+            online_update(it // a.online_every)
         starts = []
         for _ in range(a.B):
             mid = int(rng.integers(0, len(lib))); mo = lib[mid]
@@ -275,7 +367,8 @@ def main():
         gseq = torch.as_tensor(np.stack(gl).astype(np.float32)).cuda()   # (N,H,730)
 
         prev = torch.zeros(Nb, 29, device="cuda")
-        Rs = []; Vs = []
+        c = torch.ones(Nb, device="cuda")
+        Rs = []; Vs = []; Ds = []; S_list = []; G_list = []
         clamp_fracs = []
         bc_devs = []
         for t in range(a.H):
@@ -291,24 +384,32 @@ def main():
                 clamp_fracs.append(float(((act.detach() < _lo) | (act.detach() > _hi)).float().mean()))
                 act = torch.clamp(act, _lo, _hi)
             s = wm.step(s, act, xi_b)
-            r = D.reward8(s, act, prev, {k: v[:, t] for k, v in refb.items()}, fk)
+            rt = {k: v[:, t] for k, v in refb.items()}
+            r = D.reward8(s, act, prev, rt, fk)
+            if a.survival:
+                d_t = soft_done(s, rt, a.term_thresh, a.tilt_thresh)
+                Ds.append(d_t)
+                c = c * (1.0 - d_t)
+                r = r * c
             Rs.append(r)
             Vs.append(crit(s.detach(), gseq[:, t], xi_b).squeeze(-1))
+            S_list.append(s.detach()); G_list.append(gseq[:, t])
             oh = torch.cat([oh[:, 1:], obs71(s, act)[:, None, :]], 1)
             prev = act
         R = torch.stack(Rs, 1)          # (N,H) 可微
         V = torch.stack(Vs, 1)          # (N,H) 可微
-        with torch.no_grad():
-            v_last = crit(s.detach(), gseq[:, -1], xi_b).squeeze(-1)
-        # actor: 可微回报 + 分离的 bootstrap
+        # P0: bootstrap 参与策略梯度 (论文 eq.policy-obj 里 γ^H ĉ_H V(ŝ_H))
+        v_last = crit(s, gseq[:, -1], xi_b).squeeze(-1)
         disc = 1.0; J = torch.zeros(Nb, device="cuda")
         for t in range(a.H):
             J = J + disc * R[:, t]
             disc *= a.gamma
-        J = J + disc * v_last.detach()
+        _boot = (c * v_last) if a.survival else v_last
+        J = J + disc * (_boot if a.bootstrap_grad else _boot.detach())
         # critic 目标: 同一批回报, 但全部 detach
         with torch.no_grad():
-            Rd = R.detach(); retd = torch.zeros_like(Rd); acc = v_last
+            Rd = R.detach(); retd = torch.zeros_like(Rd)
+            acc = (c.detach() * v_last.detach()) if a.survival else v_last.detach()
             for t in reversed(range(a.H)):
                 acc = Rd[:, t] + a.gamma * acc
                 retd[:, t] = acc
@@ -316,33 +417,51 @@ def main():
         if a.bc_anchor > 0 and bc_devs:
             loss_p = loss_p + a.bc_anchor * torch.stack(bc_devs).mean()
         loss_v = ((V - retd) ** 2).mean()
-        opt_p.zero_grad(); loss_p.backward()
-        _gn = sum(float(q.grad.norm())**2 for q in pol.parameters() if q.grad is not None) ** 0.5
-        torch.nn.utils.clip_grad_norm_(pol.parameters(), 1.0)
-        # P2: 更新前记录参考动作, 更新后做信赖域回溯
-        if a.kl_target > 0:
-            with torch.no_grad():
-                a_ref = (anchor_net(g0, oh_start) if anchor_net is not None
-                         else pol(g0, oh_start)).detach()
-            old_par = [q.detach().clone() for q in (anchor_net.parameters() if anchor_net is not None
-                                                    else pol.parameters())]
-        opt_p.step()
-        dev_val = 0.0
-        if a.kl_target > 0:
-            with torch.no_grad():
-                dev_val = float(((pol(g0, oh_start) - a_ref) ** 2).mean())
-            n_bt = 0
-            while dev_val > 1.5 * a.kl_target and n_bt < 6:
-                alpha = (a.kl_target / max(dev_val, 1e-12)) ** 0.5
+        _do_policy = it >= a.critic_warmup
+        dev_val = 0.0; n_bt = 0; _gn = 0.0
+        if _do_policy:
+            opt_p.zero_grad(); loss_p.backward()
+            _gn = sum(float(q.grad.norm())**2 for q in pol.parameters() if q.grad is not None) ** 0.5
+            torch.nn.utils.clip_grad_norm_(pol.parameters(), 1.0)
+            # P2: 更新前记录参考动作, 更新后做信赖域回溯
+            if a.kl_target > 0:
                 with torch.no_grad():
-                    for q, q0 in zip(pol.parameters(), old_par):
-                        q.copy_(q0 + alpha * (q - q0))
+                    a_ref = (anchor_net(g0, oh_start) if anchor_net is not None
+                             else pol(g0, oh_start)).detach()
+                old_par = [q.detach().clone() for q in (anchor_net.parameters() if anchor_net is not None
+                                                        else pol.parameters())]
+            opt_p.step()
+            dev_val = 0.0
+            if a.kl_target > 0:
+                with torch.no_grad():
                     dev_val = float(((pol(g0, oh_start) - a_ref) ** 2).mean())
-                n_bt += 1
+                n_bt = 0
+                while dev_val > 1.5 * a.kl_target and n_bt < 6:
+                    alpha = (a.kl_target / max(dev_val, 1e-12)) ** 0.5
+                    with torch.no_grad():
+                        for q, q0 in zip(pol.parameters(), old_par):
+                            q.copy_(q0 + alpha * (q - q0))
+                        dev_val = float(((pol(g0, oh_start) - a_ref) ** 2).mean())
+                    n_bt += 1
             if a.reset_adam_on_bt and n_bt > 0:
                 opt_p.state.clear()          # 动量指向原方向, 不清会再次过冲
-        opt_v.zero_grad(); loss_v.backward()
-        torch.nn.utils.clip_grad_norm_(crit.parameters(), 1.0); opt_v.step()
+        # 论文: critic 每轮 5 epochs x 4 minibatches, 每次 minibatch 重新前向
+        S_all = torch.stack(S_list, 1).reshape(-1, 71)
+        G_all = torch.stack(G_list, 1).reshape(-1, goal_dim)
+        T_all = retd.reshape(-1)
+        Nflat = S_all.shape[0]
+        xi_flat = xi_b.repeat_interleave(a.H, 0)[:Nflat]
+        loss_v = torch.zeros((), device="cuda")
+        nsplit = max(a.critic_minibatches, 1)
+        for _ep in range(max(a.critic_epochs, 1)):
+            perm = torch.randperm(Nflat, device="cuda")
+            for mb in torch.chunk(perm, nsplit):
+                if len(mb) == 0: continue
+                v_mb = crit(S_all[mb], G_all[mb], xi_flat[mb]).squeeze(-1)
+                lv_mb = ((v_mb - T_all[mb]) ** 2).mean()
+                opt_v.zero_grad(); lv_mb.backward()
+                torch.nn.utils.clip_grad_norm_(crit.parameters(), 1.0); opt_v.step()
+                loss_v = lv_mb.detach()
         J_val = float(J.mean().detach()); lv = float(loss_v.detach())
         if (it+1) % 10 == 0:
             e_std, e_rets = eval_std()
@@ -353,7 +472,8 @@ def main():
             print(f"  it {it+1}/{a.iters} J={J_val:.4f} Vloss={lv:.4f} "
                   f"std={e_std:.4f} (best {best_std:.4f}, base {std0:.4f}) "
                   f"dev={dev_val:.4f} clamp={100*np.mean(clamp_fracs) if clamp_fracs else 0:.0f}% "
-                  f"|g|={_gn:.2e} |V|={float(Vs[-1].abs().mean().detach()):.2f} ({time.time()-t0:.0f}s)", flush=True)
+                  f"|g|={_gn:.2e} |V|={float(Vs[-1].abs().mean().detach()):.2f} "
+                  f"c_end={float(c.mean().detach()):.2f} d_mean={float(torch.stack(Ds).mean().detach()) if Ds else 0:.3f} ({time.time()-t0:.0f}s)", flush=True)
             hist_log.append({"it": it+1, "J": J_val, "vloss": lv, "std": float(e_std),
                              "dev": dev_val})
 
