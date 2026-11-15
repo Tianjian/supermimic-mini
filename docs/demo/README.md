@@ -30,9 +30,24 @@
 - `supermimic_ppo_demo_long.mp4`：teacher + residual（env8 **0.466**）在 5 条 trimmed LAFAN1 clip 上各 400 步，约 40 s；渲染脚本 `scripts/render_ppo_policy_long.py`。
 - 标准版 `supermimic_ppo_demo.mp4`（150 步/条，19.6 s）保留用于快速查看。
 
+## 阶段三：MPC vs 教师（2026-11-15 新增）
+
+三格同步对比（参考 / 教师 / MPC），150 控制步：
+
+| 视频 | clip | 教师 | MPC | 相对 |
+|---|---|---|---|---|
+| `mpc/mpc_vs_teacher_run1_subject2.mp4` | run1 | 0.5232 | **0.5874** | **+12.3%** |
+| `mpc/mpc_vs_teacher_sprint1_subject2.mp4` | sprint1 | 0.6065 | 0.5934 | −2.2% |
+
+说明：150 步内 sprint 只差 −2.2%，但回退随回合**累积**——500 步时到 **−17.8%**。
+这正是"规划器的效应随超参与回合长度变化"的直接可视化，与 §阶段三的结论一致。
+
+渲染：`MUJOCO_GL=glfw python exp/render_mpc.py --clip run1_subject2 --steps 150 --opt-steps 10`
+
 ## README 内嵌动图（2026-11-15）
 
 - `phase1_wmbptt.gif`（677 KB）：阶段一（CPU MuJoCo + RTX 2060）从零训练的 WM+BPTT 策略跟随 Sprint，右侧为参考动作。
+- `phase3_mpc.gif`（505 KB）：阶段三 MPC 与教师在 run1 上的三格同步对比（前 3 秒）。
 - `phase2_compare.gif`（762 KB）：阶段二五格对比——参考 / 教师 / BC / BPTT+信赖域 / PD 同 clip 同步，左上角实时分数与摔倒步数。
 
 均由对应 mp4 压制：`ffmpeg -i <in>.mp4 -vf "fps=10,scale=420:-1,split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse" <out>.gif`。

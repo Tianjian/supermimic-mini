@@ -252,6 +252,8 @@ MUJOCO_GL=glfw python exp/render_compare.py --clip walk1_subject1 --steps 300
 
 所以结论要分开说：**"把梯度固化进策略权重"这条路已经穷举完毕且失败；"只优化一个窗口的动作序列"这条路有正信号，但视野上限约 H=16。**
 
+![阶段三：MPC 与教师三格对比（参考 / 教师 / MPC）](docs/demo/phase3_mpc.gif)
+
 **闭环 MPC 的整回合实测**（H=8、每步重规划、500 步、两种配置）：
 
 | 配置 | 均值 | 相对教师 | 存活 |
