@@ -33,6 +33,7 @@ docs/
 | 我在设计上犯了哪些错 | [reviews/critical-review-18-items](reviews/critical-review-18-items.md) |
 | 演示视频 | [demo/README](demo/README.md) |
 | 数据图表 | `figures/`（f1 视野衰减 / f2 扰动对照 / f3 K 敏感性 / f4 逐步曲线 / f5 排行榜） |
+| 对外文章 | [知乎专栏](https://zhuanlan.zhihu.com/p/2105572906642288669)：《从 6GB 到 16GB：SuperMimic 的机制是真的，但收益是假的》（源文 `zhihu-article.html`，发布脚本 `scripts/publish_zhihu_article.py`） |
 
 ---
 
